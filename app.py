@@ -2,34 +2,109 @@ import streamlit as st
 import pandas as pd
 import random
 
-# ==================== PAGE CONFIG ====================
+# ==================== PAGE CONFIG & INJECTION ====================
 st.set_page_config(
-    page_title="🌾 Fertilizer Distribution Management System",
+    page_title="Fertilizer Distribution Management System",
     page_icon="🌾",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
+# Custom CSS for modern visual design and clean typography
+st.markdown("""
+    <style>
+    /* Global Styling */
+    .main {
+        background-color: #f8fafc;
+    }
+    .stAppHeader {
+        background-color: rgba(255, 255, 255, 0.8);
+    }
+    
+    /* Hero Header Banner */
+    .hero-banner {
+        background: linear-gradient(135deg, #1e3a8a 0%, #0d9488 100%);
+        padding: 24px 32px;
+        border-radius: 16px;
+        color: white;
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+        margin-bottom: 25px;
+    }
+    .hero-banner h1 {
+        color: #ffffff !important;
+        font-weight: 700 !important;
+        margin-bottom: 4px !important;
+    }
+    .hero-banner p {
+        color: #e2e8f0 !important;
+        font-size: 1.05rem;
+        margin-bottom: 0px !important;
+    }
+
+    /* Metric Cards */
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        padding: 18px 24px;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    }
+    div[data-testid="stMetricLabel"] {
+        font-weight: 600;
+        color: #64748b;
+    }
+    div[data-testid="stMetricValue"] {
+        color: #0f172a;
+        font-weight: 700;
+    }
+
+    /* Styled Code Box for Links */
+    .stCode {
+        border-radius: 10px !important;
+        border: 1px solid #cbd5e1 !important;
+    }
+
+    /* Buttons */
+    .stButton>button {
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        transition: all 0.2s ease-in-out;
+    }
+    .stButton>button:hover {
+        transform: translateY(-1px);
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # ==================== SESSION STATE INITIALIZATION ====================
-# Initialize default data structures in session state so data persists during the session
 if "user" not in st.session_state:
     st.session_state.user = None
 
 if "regions" not in st.session_state:
-    st.session_state.regions = [{"id": "REG-001", "name": "Oromia"}]
+    st.session_state.regions = [{"id": "REG-001", "name": "Oromia Region"}]
 
 if "zones" not in st.session_state:
-    st.session_state.zones = [{"id": "ZN-001", "name": "Jimma Zone", "region_id": "REG-001"}]
+    st.session_state.zones = [
+        {"id": "ZN-001", "name": "Jimma Zone", "region_id": "REG-001"},
+        {"id": "ZN-002", "name": "West Shoa Zone", "region_id": "REG-001"}
+    ]
 
 if "woredas" not in st.session_state:
-    st.session_state.woredas = [{"id": "WRD-001", "name": "Manna Woreda", "zone_id": "ZN-001"}]
+    st.session_state.woredas = [
+        {"id": "WRD-001", "name": "Manna Woreda", "zone_id": "ZN-001"},
+        {"id": "WRD-002", "name": "Goma Woreda", "zone_id": "ZN-001"}
+    ]
 
 if "kebeles" not in st.session_state:
-    st.session_state.kebeles = [{"id": "KEB-001", "name": "Yebu Kebele", "woreda_id": "WRD-001"}]
+    st.session_state.kebeles = [
+        {"id": "KEB-001", "name": "Yebu Kebele", "woreda_id": "WRD-001"},
+        {"id": "KEB-002", "name": "Agaro Kebele", "woreda_id": "WRD-001"}
+    ]
 
 if "villages" not in st.session_state:
     st.session_state.villages = [
-        {"id": "VIL-001", "name": "Village 01", "kebele_id": "KEB-001"},
-        {"id": "VIL-002", "name": "Village 02", "kebele_id": "KEB-001"}
+        {"id": "VIL-001", "name": "Gudeta Village", "kebele_id": "KEB-001"},
+        {"id": "VIL-002", "name": "Boreta Village", "kebele_id": "KEB-001"}
     ]
 
 if "farmers" not in st.session_state:
@@ -43,8 +118,7 @@ if "farmers" not in st.session_state:
 if "groups" not in st.session_state:
     st.session_state.groups = []
 
-# ==================== URL QUERY PARAMETER ROUTING ====================
-# Streamlit reads parameters from the URL (e.g. ?role=da_worker&kebele_id=KEB-001)
+# ==================== ROUTING VIA URL QUERY PARAMETERS ====================
 query_params = st.query_params
 
 if "role" in query_params and st.session_state.user is None:
@@ -75,7 +149,6 @@ if "role" in query_params and st.session_state.user is None:
         }
 
 def get_app_url():
-    # Replace this string with your deployed app URL (e.g., https://your-app.streamlit.app)
     return "https://your-app.streamlit.app"
 
 def logout():
@@ -85,132 +158,177 @@ def logout():
 
 # ==================== 1. REGIONAL MANAGER DASHBOARD ====================
 def show_regional_manager():
-    st.title("🗺️ Regional Manager Dashboard")
-    st.caption(f"Logged in as: **{st.session_state.user['name']}** | Region ID: {st.session_state.user.get('region_id', 'REG-001')}")
+    st.markdown("""
+        <div class="hero-banner">
+            <h1>🗺️ Regional Executive Portal</h1>
+            <p>High-level supply governance, zone allocations, and access provisioning.</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Active Zones", len(st.session_state.zones))
+    col2.metric("Total Woredas", len(st.session_state.woredas))
+    col3.metric("Registered Farmers", len(st.session_state.farmers))
+
     st.markdown("---")
 
-    col1, col2 = st.columns([2, 1])
+    left_col, right_col = st.columns([1.6, 1])
 
-    with col1:
-        st.subheader("📊 Region Overview")
-        st.metric("Total Zones", len(st.session_state.zones))
-        st.metric("Total Woredas", len(st.session_state.woredas))
-        st.metric("Total Registered Farmers", len(st.session_state.farmers))
+    with left_col:
+        st.subheader("📋 Registered Regional Zones")
+        df_zones = pd.DataFrame(st.session_state.zones)
+        st.dataframe(df_zones, use_container_width=True, hide_index=True)
 
-        st.write("### Registered Zones")
-        st.dataframe(pd.DataFrame(st.session_state.zones), use_container_width=True)
-
-    with col2:
-        st.subheader("🔗 Send Access Link to Zonal Manager")
-        selected_zone = st.selectbox("Select Target Zone", st.session_state.zones, format_func=lambda x: x["name"])
+    with right_col:
+        st.subheader("🔗 Generate Zonal Invitation Link")
+        st.write("Grant access to a Zonal Manager. They will **only** see their assigned zone.")
         
+        selected_zone = st.selectbox("Select Target Zone", st.session_state.zones, format_func=lambda x: x["name"])
         generated_link = f"{get_app_url()}/?role=zonal_manager&zone_id={selected_zone['id']}"
         
         st.code(generated_link, language="text")
-        st.info("📋 **Instructions:** Copy and send this unique link to the Zonal Manager. Opening this link will give them direct access ONLY to their Zonal Dashboard.")
+        st.success("Copy and send this unique portal link to the Zonal Manager.")
 
-    st.sidebar.button("🚪 Logout", on_click=logout)
+    st.sidebar.markdown("### User Session")
+    st.sidebar.info(f"**Logged in as:**\n{st.session_state.user['name']}")
+    st.sidebar.button("🚪 Sign Out", on_click=logout, use_container_width=True)
 
 # ==================== 2. ZONAL MANAGER DASHBOARD ====================
 def show_zonal_manager():
-    st.title("🏛️ Zonal Manager Dashboard")
-    st.caption(f"Logged in as: **{st.session_state.user['name']}** | Restricted to Zonal Scope")
+    st.markdown("""
+        <div class="hero-banner">
+            <h1>🏛️ Zonal Operations Portal</h1>
+            <p>Manage Woreda registrations and issue restricted Woreda access links.</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+    col1.metric("Managed Woredas", len(st.session_state.woredas))
+    col2.metric("Active Kebeles", len(st.session_state.kebeles))
+
     st.markdown("---")
 
-    col1, col2 = st.columns([2, 1])
+    left_col, right_col = st.columns([1.5, 1])
 
-    with col1:
+    with left_col:
         st.subheader("➕ Add New Woreda")
-        w_name = st.text_input("Woreda Name")
-        if st.button("Register Woreda"):
-            if w_name:
+        with st.form("add_woreda_form"):
+            w_name = st.text_input("Woreda Name", placeholder="e.g., Limmu Seka")
+            submit = st.form_submit_button("Register Woreda", use_container_width=True)
+            if submit and w_name:
                 new_id = f"WRD-00{len(st.session_state.woredas)+1}"
                 st.session_state.woredas.append({"id": new_id, "name": w_name, "zone_id": st.session_state.user.get("zone_id", "ZN-001")})
-                st.success(f"Woreda '{w_name}' successfully added!")
+                st.success(f"Woreda '{w_name}' added successfully!")
                 st.rerun()
 
-        st.write("### Managed Woredas")
-        st.dataframe(pd.DataFrame(st.session_state.woredas), use_container_width=True)
+        st.subheader("📋 Managed Woredas")
+        st.dataframe(pd.DataFrame(st.session_state.woredas), use_container_width=True, hide_index=True)
 
-    with col2:
-        st.subheader("🔗 Send Access Link to Woreda Manager")
+    with right_col:
+        st.subheader("🔗 Generate Woreda Invitation Link")
+        st.write("Share access with a Woreda Manager without giving them access to Zonal tools.")
+        
         if st.session_state.woredas:
             selected_woreda = st.selectbox("Select Target Woreda", st.session_state.woredas, format_func=lambda x: x["name"])
             generated_link = f"{get_app_url()}/?role=woreda_manager&woreda_id={selected_woreda['id']}"
-            
             st.code(generated_link, language="text")
-            st.info("📋 **Instructions:** Send this link to the Woreda Manager. They will not be able to view Regional or Zonal settings.")
+            st.success("Copy and share this link with the assigned Woreda Manager.")
 
-    st.sidebar.button("🚪 Logout", on_click=logout)
+    st.sidebar.markdown("### User Session")
+    st.sidebar.info(f"**Logged in as:**\n{st.session_state.user['name']}")
+    st.sidebar.button("🚪 Sign Out", on_click=logout, use_container_width=True)
 
 # ==================== 3. WOREDA MANAGER DASHBOARD ====================
 def show_woreda_manager():
-    st.title("📍 Woreda Manager Dashboard")
-    st.caption(f"Logged in as: **{st.session_state.user['name']}** | Restricted to Woreda Scope")
+    st.markdown("""
+        <div class="hero-banner">
+            <h1>📍 Woreda Administration Portal</h1>
+            <p>Manage Kebeles and issue field access links for local Development Agents (DA).</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+    col1.metric("Registered Kebeles", len(st.session_state.kebeles))
+    col2.metric("Total Villages", len(st.session_state.villages))
+
     st.markdown("---")
 
-    col1, col2 = st.columns([2, 1])
+    left_col, right_col = st.columns([1.5, 1])
 
-    with col1:
-        st.subheader("➕ Add New Kebele")
-        k_name = st.text_input("Kebele Name")
-        if st.button("Register Kebele"):
-            if k_name:
+    with left_col:
+        st.subheader("➕ Register Kebele")
+        with st.form("add_kebele_form"):
+            k_name = st.text_input("Kebele Name", placeholder="e.g., Kebele 01")
+            submit = st.form_submit_button("Register Kebele", use_container_width=True)
+            if submit and k_name:
                 new_id = f"KEB-00{len(st.session_state.kebeles)+1}"
                 st.session_state.kebeles.append({"id": new_id, "name": k_name, "woreda_id": st.session_state.user.get("woreda_id", "WRD-001")})
-                st.success(f"Kebele '{k_name}' registered successfully!")
+                st.success(f"Kebele '{k_name}' registered!")
                 st.rerun()
 
-        st.write("### Managed Kebeles")
-        st.dataframe(pd.DataFrame(st.session_state.kebeles), use_container_width=True)
+        st.subheader("📋 Active Kebeles")
+        st.dataframe(pd.DataFrame(st.session_state.kebeles), use_container_width=True, hide_index=True)
 
-    with col2:
-        st.subheader("🔗 Send Access Link to DA Worker")
+    with right_col:
+        st.subheader("🔗 Generate DA Worker Access Link")
+        st.write("Create a direct access link for the Field Development Agent (DA).")
+        
         if st.session_state.kebeles:
-            selected_kebele = st.selectbox("Select Target Kebele", st.session_state.kebeles, format_func=lambda x: x["name"])
+            selected_kebele = st.selectbox("Select Kebele", st.session_state.kebeles, format_func=lambda x: x["name"])
             generated_link = f"{get_app_url()}/?role=da_worker&kebele_id={selected_kebele['id']}"
-            
             st.code(generated_link, language="text")
-            st.info("📋 **Instructions:** Share this link with the assigned Development Agent (DA). They will only access the Field Operations & Registration tools.")
+            st.success("Send this link to the DA worker operating in this Kebele.")
 
-    st.sidebar.button("🚪 Logout", on_click=logout)
+    st.sidebar.markdown("### User Session")
+    st.sidebar.info(f"**Logged in as:**\n{st.session_state.user['name']}")
+    st.sidebar.button("🚪 Sign Out", on_click=logout, use_container_width=True)
 
 # ==================== 4. DA / FIELD WORKER DASHBOARD ====================
 def show_da_worker():
-    st.title("🌾 Field Operations — DA Dashboard")
-    st.caption(f"Logged in as: **{st.session_state.user['name']}** | Kebele Scope")
-    st.markdown("---")
+    st.markdown("""
+        <div class="hero-banner">
+            <h1>🌾 Field Operations & Distribution Portal</h1>
+            <p>Register villages, track local farmers, and generate fair distribution groups.</p>
+        </div>
+    """, unsafe_allow_html=True)
 
-    menu = st.sidebar.radio("Navigation", ["🏡 Village Management", "👨‍🌾 Farmer Registration", "🎲 Fertilizer Group Generator"])
+    st.sidebar.markdown("### Field Menu")
+    menu = st.sidebar.radio("Navigate Tasks", ["🏡 Village Setup", "👨‍🌾 Farmer Enrollment", "🎲 Distribution Grouping"])
 
     # 1. VILLAGE MANAGEMENT
-    if menu == "🏡 Village Management":
-        st.subheader("Register New Village")
-        v_name = st.text_input("Village / Got Name")
-        if st.button("Add Village"):
-            if v_name:
-                v_id = f"VIL-00{len(st.session_state.villages)+1}"
-                st.session_state.villages.append({"id": v_id, "name": v_name, "kebele_id": st.session_state.user.get("kebele_id", "KEB-001")})
-                st.success(f"Village '{v_name}' added!")
-                st.rerun()
-
-        st.write("### Current Villages")
-        st.dataframe(pd.DataFrame(st.session_state.villages), use_container_width=True)
-
-    # 2. FARMER REGISTRATION
-    elif menu == "👨‍🌾 Farmer Registration":
-        st.subheader("Register New Farmer")
-        col1, col2 = st.columns(2)
+    if menu == "🏡 Village Setup":
+        st.subheader("🏡 Register New Village / Got")
         
+        col1, col2 = st.columns([1, 1.5])
         with col1:
-            f_name = st.text_input("Full Name")
-            f_phone = st.text_input("Phone Number")
-        with col2:
-            f_village = st.selectbox("Select Village", st.session_state.villages, format_func=lambda x: x["name"]) if st.session_state.villages else None
-            f_land = st.number_input("Land Size (Hectares)", min_value=0.1, value=1.0, step=0.1)
+            with st.form("add_village_form"):
+                v_name = st.text_input("Village Name", placeholder="e.g., Gudeta Got")
+                submit = st.form_submit_button("Add Village", use_container_width=True)
+                if submit and v_name:
+                    v_id = f"VIL-00{len(st.session_state.villages)+1}"
+                    st.session_state.villages.append({"id": v_id, "name": v_name, "kebele_id": st.session_state.user.get("kebele_id", "KEB-001")})
+                    st.success(f"Village '{v_name}' registered!")
+                    st.rerun()
 
-        if st.button("Register Farmer"):
-            if f_name and f_village:
+        with col2:
+            st.write("### Current Registered Villages")
+            st.dataframe(pd.DataFrame(st.session_state.villages), use_container_width=True, hide_index=True)
+
+    # 2. FARMER ENROLLMENT
+    elif menu == "👨‍🌾 Farmer Enrollment":
+        st.subheader("👨‍🌾 Enroll Local Farmer")
+        
+        with st.form("enroll_farmer_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                f_name = st.text_input("Full Name", placeholder="e.g., Chala Beyene")
+                f_phone = st.text_input("Phone Number", placeholder="+2519...")
+            with col2:
+                f_village = st.selectbox("Select Village", st.session_state.villages, format_func=lambda x: x["name"]) if st.session_state.villages else None
+                f_land = st.number_input("Farmland Area (Hectares)", min_value=0.1, value=1.0, step=0.1)
+
+            submit = st.form_submit_button("Complete Farmer Enrollment", use_container_width=True)
+            if submit and f_name and f_village:
                 f_id = f"FAR-00{len(st.session_state.farmers)+1}"
                 st.session_state.farmers.append({
                     "id": f_id,
@@ -219,62 +337,70 @@ def show_da_worker():
                     "land_size": f_land,
                     "phone": f_phone
                 })
-                st.success(f"Farmer '{f_name}' registered successfully!")
+                st.success(f"Farmer '{f_name}' successfully enrolled!")
                 st.rerun()
 
-        st.write("### Registered Farmers")
+        st.markdown("---")
+        st.subheader("📋 Enrolled Farmers Directory")
         if st.session_state.farmers:
-            df_farmers = pd.DataFrame(st.session_state.farmers)
-            st.dataframe(df_farmers, use_container_width=True)
+            st.dataframe(pd.DataFrame(st.session_state.farmers), use_container_width=True, hide_index=True)
 
-    # 3. FERTILIZER GROUP GENERATOR
-    elif menu == "🎲 Fertilizer Group Generator":
-        st.subheader("Generate Random Distribution Groups")
-        st.write("Group farmers together randomly for fair fertilizer distribution batches.")
+    # 3. DISTRIBUTION GROUP GENERATOR
+    elif menu == "🎲 Distribution Grouping":
+        st.subheader("🎲 Random Group Generator")
+        st.write("Automatically pair farmers into fair, randomized groups for batch fertilizer distribution.")
 
         if not st.session_state.farmers:
-            st.warning("No farmers registered yet. Please register farmers first.")
+            st.warning("No farmers enrolled yet. Please enroll farmers first.")
         else:
-            group_size = st.number_input("Target Group Size (Farmers per Group)", min_value=1, max_value=20, value=2)
-            
-            if st.button("Generate Random Groups"):
-                farmers_copy = st.session_state.farmers.copy()
-                random.shuffle(farmers_copy)
-                
-                groups = [farmers_copy[i:i + group_size] for i in range(0, len(farmers_copy), group_size)]
-                st.session_state.groups = groups
-                st.success(f"Successfully generated {len(groups)} distribution group(s)!")
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                group_size = st.number_input("Target Group Size", min_value=1, max_value=10, value=2)
+                if st.button("Shuffle & Create Groups", type="primary", use_container_width=True):
+                    farmers_copy = st.session_state.farmers.copy()
+                    random.shuffle(farmers_copy)
+                    groups = [farmers_copy[i:i + group_size] for i in range(0, len(farmers_copy), group_size)]
+                    st.session_state.groups = groups
+                    st.success(f"Formed {len(groups)} distribution group(s)!")
 
-            if st.session_state.groups:
-                st.write("### Distribution Group Assignment")
-                for idx, group in enumerate(st.session_state.groups, 1):
-                    with st.expander(f"📦 Group {idx} ({len(group)} Farmers)", expanded=True):
-                        for f in group:
-                            st.write(f"- **{f['name']}** (ID: {f['id']}, Land: {f['land_size']} ha, Phone: {f['phone']})")
+            with col2:
+                if st.session_state.groups:
+                    st.write("### Generated Batches")
+                    for idx, group in enumerate(st.session_state.groups, 1):
+                        with st.expander(f"📦 Batch Group #{idx} ({len(group)} Farmers)", expanded=True):
+                            for f in group:
+                                st.write(f"- **{f['name']}** — {f['land_size']} ha | 📞 `{f['phone']}`")
 
-    st.sidebar.button("🚪 Logout", on_click=logout)
+    st.sidebar.markdown("---")
+    st.sidebar.info(f"**Logged in as:**\n{st.session_state.user['name']}")
+    st.sidebar.button("🚪 Sign Out", on_click=logout, use_container_width=True)
 
-# ==================== MAIN ROUTER & LOGIN FALLBACK ====================
+# ==================== MAIN ROUTER & SECURE ENTRANCE ====================
 def main():
     if st.session_state.user is None:
-        st.title("🌾 Fertilizer Distribution System")
-        st.subheader("🔑 Access Restricted")
-        st.info("Please click the specific access link sent to you by your superior manager.")
-        st.markdown("---")
-        
-        st.write("### Manual Fallback Login (Testing Purpose Only)")
-        selected_role = st.selectbox(
-            "Select Role to Enter:",
-            ["regional_manager", "zonal_manager", "woreda_manager", "da_worker"],
-            format_func=lambda x: x.replace("_", " ").title()
-        )
-        
-        if st.button("Enter Dashboard"):
-            st.session_state.user = {
-                "role": selected_role,
-                "name": f"Demo {selected_role.replace('_', ' ').title()}"
-            }
-            st.rerun()
+        st.markdown("""
+            <div class="hero-banner" style="text-align: center;">
+                <h1>🌾 Fertilizer Distribution Management System</h1>
+                <p>Secure, multi-tier agricultural supply governance platform</p>
+            </div>
+        """, unsafe_allow_html=True)
+
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.warning("🔒 **Access Restricted:** Opening a valid access link sent by your regional manager will route you automatically.")
+            
+            with st.expander("🛠️ Manual Testing Login (Role Portal)", expanded=True):
+                selected_role = st.selectbox(
+                    "Choose Portal Role:",
+                    ["regional_manager", "zonal_manager", "woreda_manager", "da_worker"],
+                    format_func=lambda x: x.replace("_", " ").title()
+                )
+                if st.button("Enter Portal", use_container_width=True, type="primary"):
+                    st.session_state.user = {
+                        "role": selected_role,
+                        "name": f"Demo {selected_role.replace('_', ' ').title()}"
+                    }
+                    st.rerun()
     else:
         role = st.session_state.user["role"]
         if role == "regional_manager":
