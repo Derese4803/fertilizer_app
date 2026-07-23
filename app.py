@@ -29,7 +29,6 @@ def init_db():
     cursor.execute("PRAGMA foreign_keys = ON;")
 
     # 1. Users Table (Unique across username + role + unit_id)
-    # Allows identical usernames across DIFFERENT links/units
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -137,6 +136,14 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
+# Safe Primary Key Generator
+def generate_unique_id(table_name: str, prefix: str) -> str:
+    conn = get_db_connection()
+    count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+    conn.close()
+    return f"{prefix}-{count + 1:04d}-{random.randint(100, 999)}"
 
 
 # ==================== STREAMLIT CONFIG & UI STYLING ====================
@@ -275,8 +282,6 @@ if not st.session_state["authenticated"]:
             if submit_reg:
                 if reg_username and reg_password and reg_passcode_input:
                     unit = None
-                    unit_name = "Selected Unit"
-                    
                     if target_role == "Zonal Manager":
                         unit = conn.execute("SELECT id, name FROM zones WHERE reg_passcode = ?", (reg_passcode_input,)).fetchone()
                     elif target_role == "Woreda Manager":
@@ -350,7 +355,7 @@ if role == "Regional Manager":
             z_quota = st.number_input("Initial Quota (Quintals)", min_value=0, value=1000, step=100)
 
             if st.form_submit_button("Register Zone") and z_name:
-                new_z_id = f"ZN-00{len(zones)+1}"
+                new_z_id = generate_unique_id("zones", "ZN")
                 passcode = generate_passcode()
                 conn.execute(
                     "INSERT INTO zones VALUES (?, ?, ?, ?, ?)",
@@ -438,7 +443,7 @@ elif role == "Zonal Manager":
             w_price = st.number_input("Fertilizer Unit Price (ETB / Qtl)", min_value=1000.0, value=4500.0, step=100.0)
 
             if st.form_submit_button("Register Woreda") and w_name:
-                new_w_id = f"WRD-00{len(woredas)+1}"
+                new_w_id = generate_unique_id("woredas", "WRD")
                 passcode = generate_passcode()
                 conn.execute(
                     "INSERT INTO woredas VALUES (?, ?, ?, ?, ?, ?)",
@@ -512,7 +517,7 @@ elif role == "Woreda Manager":
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs(["➕ Register Kebele & Link Selector", "💳 Configure Fees", "⚖️ Cascade Kebele Quota", "📊 Kebeles"])
+    tab1, tab2, tab3, tab4 = st.tabs(["➕ Register Kebele & Link Selector", "💳 Configure Fees (1, 2, 3...)", "⚖️ Cascade Kebele Quota", "📊 Kebeles"])
 
     with tab1:
         st.subheader("1. Register New Kebele & Assign DA")
@@ -524,14 +529,14 @@ elif role == "Woreda Manager":
             k_quota = c_b.number_input("Initial Quota (Quintals)", min_value=0, value=200, step=10)
 
             if st.form_submit_button("Register Kebele") and k_name:
-                new_k_id = f"KEB-00{len(kebeles)+1}"
+                new_k_id = generate_unique_id("kebeles", "KEB")
                 passcode = generate_passcode()
                 conn.execute(
                     "INSERT INTO kebeles VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (new_k_id, k_name, woreda["id"], da_name, assistant_name, k_quota, passcode),
                 )
                 conn.commit()
-                st.success(f"Kebele '{k_name}' registered!")
+                st.success(f"Kebele '{k_name}' registered successfully!")
                 st.rerun()
 
         st.markdown("---")
@@ -559,9 +564,9 @@ elif role == "Woreda Manager":
     with tab2:
         st.subheader("Configure Mandatory Fee Items")
         with st.form("add_fee_form"):
-            fee_name_in = st.text_input("Fee Name", placeholder="e.g., ስፖርት ክፍያ (Sport Fee)")
-            fee_amount_in = st.number_input("Amount (ETB)", min_value=0.0, value=150.0, step=10.0)
-            if st.form_submit_button("Save Fee Item") and fee_name_in:
+            fee_name_in = st.text_input("Fee Name", placeholder="e.g., 3. ትምህርት ቤት ክፍያ (School Fee)")
+            fee_amount_in = st.number_input("Amount (ETB)", min_value=0.0, value=100.0, step=10.0)
+            if st.form_submit_button("Add Fee Item") and fee_name_in:
                 conn.execute(
                     "INSERT INTO fee_items (woreda_id, fee_name, amount) VALUES (?, ?, ?)",
                     (woreda["id"], fee_name_in, fee_amount_in),
@@ -570,8 +575,11 @@ elif role == "Woreda Manager":
                 st.success("Fee item added!")
                 st.rerun()
 
+        st.markdown("### 📋 Active Fee Items List")
         if fee_items:
-            st.dataframe(pd.DataFrame([dict(f) for f in fee_items]), use_container_width=True)
+            df_fees = pd.DataFrame([dict(f) for f in fee_items])
+            df_fees.insert(0, "No.", range(1, len(df_fees) + 1))
+            st.dataframe(df_fees[["No.", "fee_name", "amount"]], use_container_width=True)
 
     with tab3:
         if kebeles:
@@ -621,6 +629,12 @@ elif role == "DA Worker (Kebele Level)":
 
     with tab1:
         st.subheader("Register Farmer & Initial Fee Checklist")
+        
+        if fee_items:
+            st.markdown("##### Mandatory Woreda Fee Items:")
+            for idx, item in enumerate(fee_items, 1):
+                st.caption(f"**{idx}. {item['fee_name']}**: `{item['amount']:,.2f} ETB`")
+
         with st.form("da_reg_farmer"):
             col1, col2 = st.columns(2)
             f_name = col1.text_input("Full Name")
@@ -632,14 +646,14 @@ elif role == "DA Worker (Kebele Level)":
             f_land = col2.number_input("Land Size (Ha)", min_value=0.1, value=1.5, step=0.1)
             
             f_paid_fert = col2.checkbox("Fertilizer Paid")
-            f_paid_sport = col2.checkbox("ስፖርት ክፍያ (Sport Fee Paid)")
-            f_paid_tax = col2.checkbox("የመሬት ግብር (Land Tax Paid)")
-            f_paid_other = col2.checkbox("Other Fees Paid")
+            f_paid_sport = col2.checkbox("1. Sport Fee Paid")
+            f_paid_tax = col2.checkbox("2. Land Tax Paid")
+            f_paid_other = col2.checkbox("3. Additional Fees Paid")
 
             if st.form_submit_button("Register Farmer") and f_name and f_nat_id:
                 all_v = 1 if (f_paid_fert and f_paid_sport and f_paid_tax and f_paid_other) else 0
                 status_str = "In Queue" if all_v else "Pending Fees"
-                new_f_id = f"FAR-00{conn.execute('SELECT COUNT(*) FROM farmers').fetchone()[0] + 1}"
+                new_f_id = generate_unique_id("farmers", "FAR")
                 
                 try:
                     conn.execute("""
@@ -669,9 +683,9 @@ elif role == "DA Worker (Kebele Level)":
 
             with st.form("update_f_fee"):
                 chk_fert = st.checkbox("Fertilizer Paid", value=bool(f_curr["fertilizer_paid"]))
-                chk_sport = st.checkbox("Sport Fee Paid", value=bool(f_curr["sport_fee_paid"]))
-                chk_tax = st.checkbox("Land Tax Paid", value=bool(f_curr["tax_paid"]))
-                chk_other = st.checkbox("Other Fees Paid", value=bool(f_curr["other_fee_paid"]))
+                chk_sport = st.checkbox("1. Sport Fee Paid", value=bool(f_curr["sport_fee_paid"]))
+                chk_tax = st.checkbox("2. Land Tax Paid", value=bool(f_curr["tax_paid"]))
+                chk_other = st.checkbox("3. Additional Fees Paid", value=bool(f_curr["other_fee_paid"]))
 
                 if st.form_submit_button("Update Status"):
                     all_p = 1 if (chk_fert and chk_sport and chk_tax and chk_other) else 0
