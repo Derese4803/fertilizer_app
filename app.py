@@ -281,6 +281,7 @@ def show_regional_manager():
     elif "Zonal Managers" in menu:
         st.header("👥 Zonal Managers")
         managers = [m for m in MANAGERS["zonal"] if m["region_id"] == user["region_id"]]
+        zones = [z for z in ZONES if z["region_id"] == user["region_id"]]
         
         col1, col2 = st.columns([1, 2])
         
