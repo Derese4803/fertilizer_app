@@ -138,7 +138,6 @@ def init_db():
     conn.close()
 
 
-# Safe Primary Key Generator
 def generate_unique_id(table_name: str, prefix: str) -> str:
     conn = get_db_connection()
     count = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
@@ -329,7 +328,7 @@ if role == "Regional Manager":
     st.markdown("""
         <div class="hero-banner">
             <h1>🗺️ Regional Executive Portal</h1>
-            <p>Set Zonal quotas, register Zones, and generate Zonal Manager access links.</p>
+            <p>Set Zonal quotas, register Zones, and manage Zonal access links.</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -346,7 +345,7 @@ if role == "Regional Manager":
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3 = st.tabs(["➕ Register Zone & Link Selector", "⚖️ Cascade Zonal Quotas", "📊 Hierarchy"])
+    tab1, tab2, tab3, tab4 = st.tabs(["➕ Register Zone & Link Selector", "⚖️ Cascade Zonal Quotas", "📊 Hierarchy", "🗑️ Delete Zone"])
 
     with tab1:
         st.subheader("1. Register New Zone")
@@ -409,6 +408,17 @@ if role == "Regional Manager":
         """, conn)
         st.dataframe(df_all, use_container_width=True)
 
+    with tab4:
+        st.subheader("🗑️ Delete Zone Record")
+        if zones:
+            z_to_del = st.selectbox("Select Zone to Delete", [dict(z) for z in zones], format_func=lambda x: f"{x['name']} ({x['id']})", key="del_z_sb")
+            if st.button("Delete Selected Zone", type="primary"):
+                conn.execute("DELETE FROM users WHERE unit_id = ?", (z_to_del["id"],))
+                conn.execute("DELETE FROM zones WHERE id = ?", (z_to_del["id"],))
+                conn.commit()
+                st.success(f"Zone '{z_to_del['name']}' deleted successfully!")
+                st.rerun()
+
 # ==============================================================================
 # 2. ZONAL MANAGER ROLE
 # ==============================================================================
@@ -433,7 +443,7 @@ elif role == "Zonal Manager":
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3 = st.tabs(["➕ Register Woreda & Link Selector", "⚖️ Cascade Woreda Quota", "📊 Woredas"])
+    tab1, tab2, tab3, tab4 = st.tabs(["➕ Register Woreda & Link Selector", "⚖️ Cascade Woreda Quota", "📊 Woredas", "🗑️ Delete Woreda"])
 
     with tab1:
         st.subheader("1. Register New Woreda")
@@ -492,6 +502,17 @@ elif role == "Zonal Manager":
     with tab3:
         st.dataframe(pd.DataFrame([dict(w) for w in woredas]), use_container_width=True)
 
+    with tab4:
+        st.subheader("🗑️ Delete Woreda Record")
+        if woredas:
+            w_to_del = st.selectbox("Select Woreda to Delete", [dict(w) for w in woredas], format_func=lambda x: f"{x['name']} ({x['id']})", key="del_w_sb")
+            if st.button("Delete Selected Woreda", type="primary"):
+                conn.execute("DELETE FROM users WHERE unit_id = ?", (w_to_del["id"],))
+                conn.execute("DELETE FROM woredas WHERE id = ?", (w_to_del["id"],))
+                conn.commit()
+                st.success(f"Woreda '{w_to_del['name']}' deleted successfully!")
+                st.rerun()
+
 # ==============================================================================
 # 3. WOREDA MANAGER ROLE
 # ==============================================================================
@@ -517,7 +538,7 @@ elif role == "Woreda Manager":
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs(["➕ Register Kebele & Link Selector", "💳 Configure Fees (1, 2, 3...)", "⚖️ Cascade Kebele Quota", "📊 Kebeles"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["➕ Register Kebele & Link Selector", "💳 Configure Fees (1, 2, 3...)", "⚖️ Cascade Kebele Quota", "📊 Kebeles", "🗑️ Delete Kebele/Fee"])
 
     with tab1:
         st.subheader("1. Register New Kebele & Assign DA")
@@ -599,6 +620,31 @@ elif role == "Woreda Manager":
     with tab4:
         st.dataframe(pd.DataFrame([dict(k) for k in kebeles]), use_container_width=True)
 
+    with tab5:
+        st.subheader("🗑️ Delete Operations")
+        col_del1, col_del2 = st.columns(2)
+        
+        with col_del1:
+            st.markdown("##### Delete Kebele Record")
+            if kebeles:
+                k_to_del = st.selectbox("Select Kebele to Delete", [dict(k) for k in kebeles], format_func=lambda x: f"{x['name']} ({x['id']})", key="del_k_sb")
+                if st.button("Delete Kebele", type="primary"):
+                    conn.execute("DELETE FROM users WHERE unit_id = ?", (k_to_del["id"],))
+                    conn.execute("DELETE FROM kebeles WHERE id = ?", (k_to_del["id"],))
+                    conn.commit()
+                    st.success(f"Kebele '{k_to_del['name']}' deleted!")
+                    st.rerun()
+
+        with col_del2:
+            st.markdown("##### Delete Fee Item")
+            if fee_items:
+                f_to_del = st.selectbox("Select Fee Item to Delete", [dict(f) for f in fee_items], format_func=lambda x: f"{x['fee_name']} ({x['amount']} ETB)", key="del_f_sb")
+                if st.button("Delete Fee Item", type="primary"):
+                    conn.execute("DELETE FROM fee_items WHERE id = ?", (f_to_del["id"],))
+                    conn.commit()
+                    st.success("Fee item deleted!")
+                    st.rerun()
+
 # ==============================================================================
 # 4. DA WORKER ROLE (KEBELE LEVEL)
 # ==============================================================================
@@ -625,7 +671,7 @@ elif role == "DA Worker (Kebele Level)":
     c4.metric("Kebele Quota Stock", f"{kebele['fertilizer_quota']:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs(["📝 Register Farmer", "💳 Verification & Fees", "🎲 Dynamic Grouping", "📋 Distribution List"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 Register Farmer", "💳 Verification & Fees", "🎲 Dynamic Grouping", "📋 Distribution List", "🗑️ Delete Farmer"])
 
     with tab1:
         st.subheader("Register Farmer & Initial Fee Checklist")
@@ -720,5 +766,16 @@ elif role == "DA Worker (Kebele Level)":
         all_k = conn.execute("SELECT * FROM farmers WHERE kebele_id = ?", (kebele["id"],)).fetchall()
         if all_k:
             st.dataframe(pd.DataFrame([dict(f) for f in all_k]), use_container_width=True)
+
+    with tab5:
+        st.subheader("🗑️ Delete Farmer Record")
+        farmers_del_list = conn.execute("SELECT * FROM farmers WHERE kebele_id = ?", (kebele["id"],)).fetchall()
+        if farmers_del_list:
+            f_to_del = st.selectbox("Select Farmer to Delete", [dict(f) for f in farmers_del_list], format_func=lambda x: f"{x['name']} (Nat ID: {x['national_id']})", key="del_f_sb")
+            if st.button("Delete Farmer Record", type="primary"):
+                conn.execute("DELETE FROM farmers WHERE id = ?", (f_to_del["id"],))
+                conn.commit()
+                st.success(f"Farmer '{f_to_del['name']}' removed!")
+                st.rerun()
 
 conn.close()
