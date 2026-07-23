@@ -72,24 +72,22 @@ def init_db():
         )
     """)
     
-    # Auto-seed initial structure if empty
-    cursor.execute("SELECT COUNT(*) FROM regions")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO regions VALUES ('REG-001', 'Oromia Region')")
-        cursor.execute("INSERT INTO zones VALUES ('ZN-001', 'Jimma Zone', 'REG-001')")
-        cursor.execute("INSERT INTO zones VALUES ('ZN-002', 'West Shoa Zone', 'REG-001')")
-        cursor.execute("INSERT INTO woredas VALUES ('WRD-001', 'Manna Woreda', 'ZN-001')")
-        cursor.execute("INSERT INTO woredas VALUES ('WRD-002', 'Goma Woreda', 'ZN-001')")
-        cursor.execute("INSERT INTO kebeles VALUES ('KEB-001', 'Yebu Kebele', 'WRD-001', 'Alemayehu Tadesse', 'Getachew Bekele', 500)")
-        
-        seed_farmers = [
-            ('FAR-001', 'ETH-10293847', 'Abebe Bikila', 'KEB-001', 'Gudeta', 2.5, '+251911000000', 1, 'Registered', 1),
-            ('FAR-002', 'ETH-20394857', 'Kebede Tessema', 'KEB-001', 'Gudeta', 1.8, '+251911000001', 0, 'In Queue', None),
-            ('FAR-003', 'ETH-30495867', 'Almaz Ayana', 'KEB-001', 'Boreta', 3.0, '+251911000002', 1, 'Registered', 1),
-            ('FAR-004', 'ETH-40596877', 'Tirunesh Dibaba', 'KEB-001', 'Boreta', 1.2, '+251911000003', 0, 'In Queue', None),
-            ('FAR-005', 'ETH-50697887', 'Haile Gebrselassie', 'KEB-001', 'Gudeta', 4.1, '+251911000004', 1, 'Registered', None),
-        ]
-        cursor.executemany("INSERT INTO farmers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", seed_farmers)
+    # Idempotent Seeding via INSERT OR IGNORE
+    cursor.execute("INSERT OR IGNORE INTO regions VALUES ('REG-001', 'Oromia Region')")
+    cursor.execute("INSERT OR IGNORE INTO zones VALUES ('ZN-001', 'Jimma Zone', 'REG-001')")
+    cursor.execute("INSERT OR IGNORE INTO zones VALUES ('ZN-002', 'West Shoa Zone', 'REG-001')")
+    cursor.execute("INSERT OR IGNORE INTO woredas VALUES ('WRD-001', 'Manna Woreda', 'ZN-001')")
+    cursor.execute("INSERT OR IGNORE INTO woredas VALUES ('WRD-002', 'Goma Woreda', 'ZN-001')")
+    cursor.execute("INSERT OR IGNORE INTO kebeles VALUES ('KEB-001', 'Yebu Kebele', 'WRD-001', 'Alemayehu Tadesse', 'Getachew Bekele', 500)")
+    
+    seed_farmers = [
+        ('FAR-001', 'ETH-10293847', 'Abebe Bikila', 'KEB-001', 'Gudeta', 2.5, '+251911000000', 1, 'Registered', 1),
+        ('FAR-002', 'ETH-20394857', 'Kebede Tessema', 'KEB-001', 'Gudeta', 1.8, '+251911000001', 0, 'In Queue', None),
+        ('FAR-003', 'ETH-30495867', 'Almaz Ayana', 'KEB-001', 'Boreta', 3.0, '+251911000002', 1, 'Registered', 1),
+        ('FAR-004', 'ETH-40596877', 'Tirunesh Dibaba', 'KEB-001', 'Boreta', 1.2, '+251911000003', 0, 'In Queue', None),
+        ('FAR-005', 'ETH-50697887', 'Haile Gebrselassie', 'KEB-001', 'Gudeta', 4.1, '+251911000004', 1, 'Registered', None),
+    ]
+    cursor.executemany("INSERT OR IGNORE INTO farmers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", seed_farmers)
         
     conn.commit()
     conn.close()
@@ -144,7 +142,7 @@ def get_app_url():
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# Auto-login via Query Parameters if provided
+# Parse roles from URL parameters
 query_params = st.query_params
 if "role" in query_params and st.session_state.user is None:
     role = query_params["role"]
@@ -415,24 +413,31 @@ def show_da_worker():
                         st.success(f"Farmer '{f_name}' registered successfully with National ID `{f_nat_id}`!")
                         st.rerun()
                     except sqlite3.IntegrityError:
-                        st.error(f"❌ Error: A farmer with National ID `{f_nat_id}` already exists.")
+                        st.error(f"❌ Error: A farmer with National ID `{f_nat_id}` already exists in the database.")
 
     # 3. VERIFIED FARMER QUEUE
     elif menu == "⏳ Verified Farmer Queue":
         st.subheader("⏳ Pending Queue (Access Restricted to Fee-Verified Farmers)")
+        st.caption("🔒 Access Enforcement: Only farmers with verified fee payments appear in this queue.")
+
         queue_farmers = conn.execute("SELECT * FROM farmers WHERE fee_verified = 1 AND status = 'In Queue'").fetchall()
 
         if not queue_farmers:
-            st.warning("No fee-verified farmers currently waiting in queue.")
+            st.warning("No fee-verified farmers are currently waiting in the queue. Complete fee verification in the Fee Dashboard first.")
         else:
             st.dataframe(pd.DataFrame([dict(f) for f in queue_farmers]), use_container_width=True, hide_index=True)
 
             st.markdown("---")
-            selected_farmer_id = st.selectbox("Select Verified Farmer to Approve", [f["id"] for f in queue_farmers], format_func=lambda x: next(f["name"] for f in queue_farmers if f["id"] == x))
+            st.write("### Approve Farmer for Distribution")
+            selected_farmer_id = st.selectbox(
+                "Select Verified Farmer to Approve", 
+                [f["id"] for f in queue_farmers], 
+                format_func=lambda x: next(f["name"] for f in queue_farmers if f["id"] == x)
+            )
             if st.button("Approve & Mark as Fully Registered", type="primary"):
                 conn.execute("UPDATE farmers SET status = 'Registered' WHERE id = ?", (selected_farmer_id,))
                 conn.commit()
-                st.success("Farmer approved successfully!")
+                st.success("Farmer approved successfully for distribution!")
                 st.rerun()
 
     # 4. REGISTERED FARMERS DIRECTORY
@@ -442,11 +447,13 @@ def show_da_worker():
         if registered_farmers:
             st.dataframe(pd.DataFrame([dict(f) for f in registered_farmers]), use_container_width=True, hide_index=True)
         else:
-            st.warning("No registered farmers found.")
+            st.warning("No fully registered farmers found.")
 
     # 5. GROUPING & CSV EXPORT
     elif menu == "🎲 Distribution Grouping & CSV":
         st.subheader("🎲 Fertilizer Distribution Grouping Engine")
+        st.caption("🔒 Access Restriction: Only fee-verified registered farmers can be assigned to distribution groups.")
+
         verified_registered = conn.execute("SELECT * FROM farmers WHERE status = 'Registered' AND fee_verified = 1").fetchall()
 
         if not verified_registered:
@@ -466,7 +473,7 @@ def show_da_worker():
                             conn.execute("UPDATE farmers SET group_id = ? WHERE id = ?", (group_num, f["id"]))
                         group_num += 1
                     conn.commit()
-                    st.success("Groups successfully generated!")
+                    st.success("Groups successfully generated and saved!")
                     st.rerun()
 
             with col2:
@@ -481,6 +488,7 @@ def show_da_worker():
                         with st.expander(f"📦 Group Batch #{g_id} ({len(members)} Members)", expanded=True):
                             st.dataframe(df_members[["id", "national_id", "name", "phone", "village", "land_size"]], hide_index=True)
                             
+                            # CSV Export Engine
                             csv_buffer = StringIO()
                             df_members.to_csv(csv_buffer, index=False, encoding='utf-8')
                             st.download_button(
