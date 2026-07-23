@@ -1,22 +1,47 @@
+import hashlib
+import random
 import sqlite3
+import string
+from io import StringIO
 import pandas as pd
 import streamlit as st
-from io import StringIO
 
-# ==================== DATABASE INITIALIZATION ====================
-DB_FILE = "fertilizer_cascade_beauty_v4.db"
+# ==================== DATABASE CONFIGURATION ====================
+DB_FILE = "fertilizer_cascade_auth_v5.db"
+
 
 def get_db_connection():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
 
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def generate_passcode(length=6) -> str:
+    return "".join(random.choices(string.digits, k=length))
+
+
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("PRAGMA foreign_keys = ON;")
 
-    # 1. Regions Table
+    # 1. Users & Passcodes Table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL,
+            unit_id TEXT NOT NULL,
+            reg_passcode TEXT NOT NULL
+        )
+    """)
+
+    # 2. Administrative Structure Tables
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS regions (
             id TEXT PRIMARY KEY,
@@ -25,18 +50,17 @@ def init_db():
         )
     """)
 
-    # 2. Zones Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS zones (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             region_id TEXT NOT NULL,
             fertilizer_quota INTEGER DEFAULT 0,
+            reg_passcode TEXT NOT NULL,
             FOREIGN KEY (region_id) REFERENCES regions (id)
         )
     """)
 
-    # 3. Woredas Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS woredas (
             id TEXT PRIMARY KEY,
@@ -44,11 +68,11 @@ def init_db():
             zone_id TEXT NOT NULL,
             fertilizer_quota INTEGER DEFAULT 0,
             fertilizer_price_per_qtl REAL DEFAULT 4500.0,
+            reg_passcode TEXT NOT NULL,
             FOREIGN KEY (zone_id) REFERENCES zones (id)
         )
     """)
 
-    # 4. Kebeles Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS kebeles (
             id TEXT PRIMARY KEY,
@@ -57,11 +81,12 @@ def init_db():
             da_name TEXT NOT NULL,
             assistant_name TEXT NOT NULL,
             fertilizer_quota INTEGER DEFAULT 0,
+            reg_passcode TEXT NOT NULL,
             FOREIGN KEY (woreda_id) REFERENCES woredas (id)
         )
     """)
 
-    # 5. Dynamic Fee List per Woreda
+    # 3. Fees & Farmers Tables
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS fee_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +97,6 @@ def init_db():
         )
     """)
 
-    # 6. Farmers Table with Itemized Fee Verification & Quintals
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS farmers (
             id TEXT PRIMARY KEY,
@@ -94,104 +118,263 @@ def init_db():
         )
     """)
 
-    # Seed Baseline Sample Data safely
-    cursor.execute("INSERT OR IGNORE INTO regions VALUES ('REG-001', 'Oromia Region', 50000)")
-    cursor.execute("INSERT OR IGNORE INTO zones VALUES ('ZN-001', 'Jimma Zone', 'REG-001', 15000)")
-    cursor.execute("INSERT OR IGNORE INTO woredas VALUES ('WRD-001', 'Manna Woreda', 'ZN-001', 5000, 4500.0)")
-    cursor.execute("INSERT OR IGNORE INTO kebeles VALUES ('KEB-001', 'Yebu Kebele', 'WRD-001', 'Alemayehu Tadesse', 'Getachew Bekele', 1500)")
+    # Seed Default Root Admin and Sample Data
+    cursor.execute(
+        "INSERT OR IGNORE INTO regions VALUES ('REG-001', 'Oromia Region',"
+        " 50000)"
+    )
 
-    # Standard Local Fees
-    cursor.execute("INSERT OR IGNORE INTO fee_items (id, woreda_id, fee_name, amount) VALUES (1, 'WRD-001', 'ስፖርት ክፍያ (Sport Fee)', 150.0)")
-    cursor.execute("INSERT OR IGNORE INTO fee_items (id, woreda_id, fee_name, amount) VALUES (2, 'WRD-001', 'የመሬት ግብር (Land Tax)', 350.0)")
-    cursor.execute("INSERT OR IGNORE INTO fee_items (id, woreda_id, fee_name, amount) VALUES (3, 'WRD-001', 'የአገልግሎት ክፍያ (Service Fee)', 100.0)")
+    # Seed Root Admin User
+    admin_pw = hash_password("admin123")
+    cursor.execute(
+        "INSERT OR IGNORE INTO users (username, password_hash, role, unit_id,"
+        " reg_passcode) VALUES (?, ?, ?, ?, ?)",
+        ("reg_admin", admin_pw, "Regional Manager", "REG-001", "000000"),
+    )
 
-    seed_farmers = [
-        ('FAR-001', 'ETH-10293847', 'Abebe Bikila', 'KEB-001', 'Gudeta', 2.5, '+251911000000', 2.0, 1, 1, 1, 1, 1, 'Grouped', 1),
-        ('FAR-002', 'ETH-20394857', 'Kebede Tessema', 'KEB-001', 'Gudeta', 1.8, '+251911000001', 1.0, 1, 1, 1, 1, 1, 'Grouped', 1),
-        ('FAR-003', 'ETH-30495867', 'Almaz Ayana', 'KEB-001', 'Boreta', 3.0, '+251911000002', 1.5, 1, 1, 1, 1, 1, 'In Queue', None),
-        ('FAR-004', 'ETH-40596877', 'Tirunesh Dibaba', 'KEB-001', 'Boreta', 1.2, '+251911000003', 1.0, 1, 0, 1, 1, 0, 'Pending Fees', None),
-        ('FAR-005', 'ETH-50697887', 'Haile Gebrselassie', 'KEB-001', 'Gudeta', 4.1, '+251911000004', 3.0, 0, 0, 0, 0, 0, 'Pending Fees', None),
-    ]
-    cursor.executemany("INSERT OR IGNORE INTO farmers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", seed_farmers)
+    # Seed Default Zone
+    cursor.execute(
+        "INSERT OR IGNORE INTO zones VALUES ('ZN-001', 'Jimma Zone', 'REG-001',"
+        " 15000, '123456')"
+    )
+
+    # Seed Default Woreda
+    cursor.execute(
+        "INSERT OR IGNORE INTO woredas VALUES ('WRD-001', 'Manna Woreda',"
+        " 'ZN-001', 5000, 4500.0, '654321')"
+    )
+
+    # Seed Default Kebele
+    cursor.execute(
+        "INSERT OR IGNORE INTO kebeles VALUES ('KEB-001', 'Yebu Kebele',"
+        " 'WRD-001', 'Alemayehu Tadesse', 'Getachew Bekele', 1500, '112233')"
+    )
+
+    # Fees
+    cursor.execute(
+        "INSERT OR IGNORE INTO fee_items (id, woreda_id, fee_name, amount)"
+        " VALUES (1, 'WRD-001', 'ስፖርት ክፍያ (Sport Fee)', 150.0)"
+    )
+    cursor.execute(
+        "INSERT OR IGNORE INTO fee_items (id, woreda_id, fee_name, amount)"
+        " VALUES (2, 'WRD-001', 'የመሬት ግብር (Land Tax)', 350.0)"
+    )
 
     conn.commit()
     conn.close()
 
+
 # ==================== STREAMLIT CONFIG & UI STYLING ====================
 st.set_page_config(
-    page_title="Cascade Fertilizer Allocation Engine",
+    page_title="Cascade Fertilizer Management Portal",
     page_icon="🌾",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Premium Modern Glassmorphism CSS
-st.markdown("""
+st.markdown(
+    """
     <style>
-    .main { background: #f1f5f9; }
+    .main { background: #f8fafc; }
     .hero-banner {
         background: linear-gradient(135deg, #059669 0%, #0d9488 50%, #0f172a 100%);
-        padding: 30px;
-        border-radius: 20px;
+        padding: 25px 30px;
+        border-radius: 18px;
         color: white;
-        box-shadow: 0 15px 30px -10px rgba(13, 148, 136, 0.3);
+        box-shadow: 0 12px 25px -8px rgba(13, 148, 136, 0.3);
         margin-bottom: 25px;
     }
-    .hero-banner h1 { color: #ffffff !important; font-size: 2.2rem !important; font-weight: 800 !important; margin-bottom: 8px !important; }
-    .hero-banner p { color: #e2e8f0 !important; font-size: 1.1rem; margin-bottom: 0px !important; }
-    div[data-testid="stMetric"] {
-        background: #ffffff;
-        padding: 20px;
-        border-radius: 16px;
-        border: 1px solid #e2e8f0;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
-    }
-    div[data-testid="stMetricLabel"] { font-weight: 700; color: #475569; }
-    div[data-testid="stMetricValue"] { color: #0f172a; font-weight: 800; }
+    .hero-banner h1 { color: #ffffff !important; font-size: 2rem !important; font-weight: 800 !important; margin: 0 !important; }
+    .hero-banner p { color: #e2e8f0 !important; font-size: 1rem; margin-top: 5px !important; }
     .stButton>button {
         border-radius: 10px !important;
         font-weight: 700 !important;
         background: linear-gradient(135deg, #059669 0%, #0d9488 100%) !important;
         color: white !important;
         border: none !important;
-        padding: 10px 20px !important;
-        box-shadow: 0 4px 10px rgba(5, 150, 105, 0.2) !important;
+        padding: 8px 18px !important;
     }
-    .stButton>button:hover {
-        background: linear-gradient(135deg, #047857 0%, #0f766e 100%) !important;
-        box-shadow: 0 6px 15px rgba(5, 150, 105, 0.3) !important;
-    }
-    .status-badge-yes {
-        background-color: #dcfce7; color: #15803d; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.85rem;
-    }
-    .status-badge-no {
-        background-color: #fee2e2; color: #b91c1c; padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.85rem;
+    .link-box {
+        background: #f0fdf4;
+        border: 2px dashed #16a34a;
+        padding: 15px;
+        border-radius: 12px;
+        margin: 15px 0;
     }
     </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 init_db()
 
-def get_shareable_link():
+
+def get_base_url():
     try:
         host = st.context.headers.get("Host", "localhost:8501")
         return f"https://{host}"
     except Exception:
         return "http://localhost:8501"
 
-# ==================== SIDEBAR ROLE ROUTER & LINK GENERATOR ====================
-st.sidebar.markdown("## 🌾 Cascade Portal")
-role = st.sidebar.selectbox(
-    "Select Access Role:",
-    ["Regional Manager", "Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"]
-)
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔗 Shareable App Link")
-st.sidebar.info(f"Access URL:\n`{get_shareable_link()}`")
-st.sidebar.code(get_shareable_link(), language="text")
+# Initialize Session State
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+if "user_info" not in st.session_state:
+    st.session_state["user_info"] = None
+
+# Query parameters for invite links
+query_params = st.query_params
+url_role = query_params.get("role", None)
+url_passcode = query_params.get("passcode", None)
+url_unit = query_params.get("unit_id", None)
 
 conn = get_db_connection()
+
+# ==================== AUTHENTICATION SYSTEM (LOGIN / REGISTER) ====================
+if not st.session_state["authenticated"]:
+    st.markdown("""
+        <div class="hero-banner">
+            <h1>🌾 National Fertilizer Cascade Management System</h1>
+            <p>Secure Role-Based Portal Access & Multi-Tiered Passcode Verification</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+    auth_tab1, auth_tab2 = st.tabs(["🔑 Login", "📝 Register Account"])
+
+    # LOGIN TAB
+    with auth_tab1:
+        st.subheader("Login to Your Administrative Portal")
+        with st.form("login_form"):
+            login_username = st.text_input("Username")
+            login_password = st.text_input("Password", type="password")
+            submit_login = st.form_submit_button("Sign In")
+
+            if submit_login:
+                hashed = hash_password(login_password)
+                user = conn.execute(
+                    "SELECT * FROM users WHERE username = ? AND password_hash"
+                    " = ?",
+                    (login_username, hashed),
+                ).fetchone()
+
+                if user:
+                    st.session_state["authenticated"] = True
+                    st.session_state["user_info"] = dict(user)
+                    st.success(
+                        f"Welcome back, {user['username']} ({user['role']})!"
+                    )
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid Username or Password")
+
+    # REGISTER TAB
+    with auth_tab2:
+        st.subheader("Register Unit Manager Account")
+        if url_passcode:
+            st.info(
+                f"🔗 Invited via Link! Preset Role: **{url_role}** | Passcode:"
+                f" `{url_passcode}`"
+            )
+
+        with st.form("register_form"):
+            reg_username = st.text_input("Choose Username")
+            reg_password = st.text_input("Choose Password", type="password")
+
+            target_role = st.selectbox(
+                "Select Access Role",
+                [
+                    "Zonal Manager",
+                    "Woreda Manager",
+                    "DA Worker (Kebele Level)",
+                ],
+                index=[
+                    "Zonal Manager",
+                    "Woreda Manager",
+                    "DA Worker (Kebele Level)",
+                ].index(url_role)
+                if url_role
+                and url_role
+                in ["Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"]
+                else 0,
+            )
+
+            reg_passcode_input = st.text_input(
+                "6-Digit Registration Passcode",
+                value=url_passcode if url_passcode else "",
+                help="Provided by your superior manager when creating your unit.",
+            )
+
+            submit_reg = st.form_submit_button("Register Account")
+
+            if submit_reg:
+                if reg_username and reg_password and reg_passcode_input:
+                    # Validate passcode against target entity table
+                    unit = None
+                    if target_role == "Zonal Manager":
+                        unit = conn.execute(
+                            "SELECT id FROM zones WHERE reg_passcode = ?",
+                            (reg_passcode_input,),
+                        ).fetchone()
+                    elif target_role == "Woreda Manager":
+                        unit = conn.execute(
+                            "SELECT id FROM woredas WHERE reg_passcode = ?",
+                            (reg_passcode_input,),
+                        ).fetchone()
+                    elif target_role == "DA Worker (Kebele Level)":
+                        unit = conn.execute(
+                            "SELECT id FROM kebeles WHERE reg_passcode = ?",
+                            (reg_passcode_input,),
+                        ).fetchone()
+
+                    if unit:
+                        try:
+                            conn.execute(
+                                """
+                                INSERT INTO users (username, password_hash, role, unit_id, reg_passcode)
+                                VALUES (?, ?, ?, ?, ?)
+                            """,
+                                (
+                                    reg_username,
+                                    hash_password(reg_password),
+                                    target_role,
+                                    unit["id"],
+                                    reg_passcode_input,
+                                ),
+                            )
+                            conn.commit()
+                            st.success(
+                                "✅ Registration successful! Please log in under"
+                                " the 'Login' tab."
+                            )
+                        except sqlite3.IntegrityError:
+                            st.error(
+                                "❌ Username already exists. Please choose"
+                                " another."
+                            )
+                    else:
+                        st.error(
+                            "❌ Invalid Registration Passcode for the selected"
+                            " Role!"
+                        )
+                else:
+                    st.error("Please fill in all fields.")
+
+    st.stop()
+
+# ==================== MAIN LOGGED-IN PORTAL ====================
+user_info = st.session_state["user_info"]
+role = user_info["role"]
+
+# Sidebar Profile Header
+st.sidebar.markdown(f"### 👤 Logged in: **{user_info['username']}**")
+st.sidebar.caption(f"Role: **{role}**")
+if st.sidebar.button("🔒 Logout"):
+    st.session_state["authenticated"] = False
+    st.session_state["user_info"] = None
+    st.rerun()
+
+st.sidebar.markdown("---")
 
 # ==============================================================================
 # 1. REGIONAL MANAGER ROLE
@@ -199,63 +382,100 @@ conn = get_db_connection()
 if role == "Regional Manager":
     st.markdown("""
         <div class="hero-banner">
-            <h1>🗺️ Regional Executive Operations</h1>
-            <p>Set Zonal quotas, track regional distribution pipelines, and register new administrative Zones.</p>
+            <h1>🗺️ Regional Executive Portal</h1>
+            <p>Set Zonal quotas, register Zones, and generate Zonal Manager access links.</p>
         </div>
     """, unsafe_allow_html=True)
 
-    region = conn.execute("SELECT * FROM regions WHERE id = 'REG-001'").fetchone()
-    zones = conn.execute("SELECT * FROM zones WHERE region_id = 'REG-001'").fetchall()
-    
+    region = conn.execute(
+        "SELECT * FROM regions WHERE id = ?", (user_info["unit_id"],)
+    ).fetchone()
+    zones = conn.execute(
+        "SELECT * FROM zones WHERE region_id = ?", (region["id"],)
+    ).fetchall()
+
     allocated = sum([z["fertilizer_quota"] for z in zones]) if zones else 0
     remaining = region["total_quota"] - allocated
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Regional Total Quota", f"{region['total_quota']:,} Qtl")
-    c2.metric("Allocated to Zones", f"{allocated:,} Qtl")
-    c3.metric("Unallocated Reserve", f"{remaining:,} Qtl")
-    c4.metric("Active Zones", len(zones))
+    c1.metric("Region", region["name"])
+    c2.metric("Total Regional Stock", f"{region['total_quota']:,} Qtl")
+    c3.metric("Allocated to Zones", f"{allocated:,} Qtl")
+    c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3 = st.tabs(["📊 Aggregated Regional Hierarchy", "⚖️ Cascade Zonal Quotas", "➕ Register New Zone"])
+    tab1, tab2, tab3 = st.tabs(
+        ["➕ Register Zone & Send Link", "⚖️ Cascade Zonal Quotas", "📊 Hierarchy"]
+    )
 
     with tab1:
-        st.subheader("Regional Cascade View")
-        df_all = pd.read_sql_query("""
-            SELECT 
-                r.name AS Region, z.name AS Zone, z.fertilizer_quota AS Zone_Quota,
-                w.name AS Woreda, w.fertilizer_quota AS Woreda_Quota,
-                k.name AS Kebele, k.fertilizer_quota AS Kebele_Quota
-            FROM regions r
-            LEFT JOIN zones z ON z.region_id = r.id
-            LEFT JOIN woredas w ON w.zone_id = z.id
-            LEFT JOIN kebeles k ON k.woreda_id = w.id
-        """, conn)
-        st.dataframe(df_all, use_container_width=True)
+        st.subheader("Register Zone & Generate Zonal Manager Access Link")
+        with st.form("reg_zone_form"):
+            z_name = st.text_input(
+                "Zone Name", placeholder="e.g., East Hararghe Zone"
+            )
+            z_quota = st.number_input(
+                "Initial Quota (Quintals)", min_value=0, value=1000, step=100
+            )
+
+            if st.form_submit_button("Register Zone") and z_name:
+                new_z_id = f"ZN-00{len(zones)+1}"
+                passcode = generate_passcode()
+                conn.execute(
+                    "INSERT INTO zones VALUES (?, ?, ?, ?, ?)",
+                    (new_z_id, z_name, region["id"], z_quota, passcode),
+                )
+                conn.commit()
+                st.success(f"Zone '{z_name}' registered successfully!")
+                st.rerun()
+
+        st.markdown("### 🔗 Active Zonal Registration Links & Passcodes")
+        if zones:
+            for z in zones:
+                z_link = f"{get_base_url()}?role=Zonal+Manager&passcode={z['reg_passcode']}&unit_id={z['id']}"
+                st.markdown(f"""
+                    <div class="link-box">
+                        <b>📍 Zone: {z['name']}</b> | Passcode: <code>{z['reg_passcode']}</code><br>
+                        <b>Shareable Link for Zonal Manager:</b><br>
+                        <code>{z_link}</code>
+                    </div>
+                """, unsafe_allow_html=True)
 
     with tab2:
-        st.subheader("Set & Adjust Zonal Quotas")
+        st.subheader("Update Zonal Quotas")
         if zones:
-            with st.form("set_zonal_quota"):
-                sel_z = st.selectbox("Select Zone", [dict(z) for z in zones], format_func=lambda x: f"{x['name']} (Current: {x['fertilizer_quota']} Qtl)")
-                new_q = st.number_input("Assign Fertilizer Quota (Quintals)", min_value=0, max_value=region["total_quota"], value=sel_z["fertilizer_quota"], step=100)
-                if st.form_submit_button("Update Zonal Allocation"):
-                    conn.execute("UPDATE zones SET fertilizer_quota = ? WHERE id = ?", (new_q, sel_z["id"]))
+            with st.form("set_z_quota"):
+                sel_z = st.selectbox(
+                    "Select Zone",
+                    [dict(z) for z in zones],
+                    format_func=lambda x: (
+                        f"{x['name']} (Current: {x['fertilizer_quota']} Qtl)"
+                    ),
+                )
+                new_q = st.number_input(
+                    "Assign Quota (Quintals)",
+                    min_value=0,
+                    value=sel_z["fertilizer_quota"],
+                    step=100,
+                )
+                if st.form_submit_button("Save Allocation"):
+                    conn.execute(
+                        "UPDATE zones SET fertilizer_quota = ? WHERE id = ?",
+                        (new_q, sel_z["id"]),
+                    )
                     conn.commit()
-                    st.success(f"Quota for {sel_z['name']} updated to {new_q} Quintals!")
+                    st.success("Updated successfully!")
                     st.rerun()
 
     with tab3:
-        st.subheader("➕ Register New Zone")
-        with st.form("reg_zone_form"):
-            z_name = st.text_input("Zone Name", placeholder="e.g., East Hararghe Zone")
-            z_quota = st.number_input("Initial Quota (Quintals)", min_value=0, value=1000, step=100)
-            if st.form_submit_button("Register Zone") and z_name:
-                new_id = f"ZN-00{len(zones)+1}"
-                conn.execute("INSERT INTO zones VALUES (?, ?, 'REG-001', ?)", (new_id, z_name, z_quota))
-                conn.commit()
-                st.success(f"Zone '{z_name}' created!")
-                st.rerun()
+        df_all = pd.read_sql_query(
+            """
+            SELECT z.name AS Zone, z.fertilizer_quota AS Zone_Quota, w.name AS Woreda, w.fertilizer_quota AS Woreda_Quota
+            FROM zones z LEFT JOIN woredas w ON w.zone_id = z.id
+        """,
+            conn,
+        )
+        st.dataframe(df_all, use_container_width=True)
 
 # ==============================================================================
 # 2. ZONAL MANAGER ROLE
@@ -263,56 +483,100 @@ if role == "Regional Manager":
 elif role == "Zonal Manager":
     st.markdown("""
         <div class="hero-banner">
-            <h1>🏛️ Zonal Operations & Allocation Engine</h1>
-            <p>Manage Woreda allocations, verify jurisdiction totals, and register new Woredas.</p>
+            <h1>🏢 Zonal Operations Portal</h1>
+            <p>Manage Woreda allocations and generate Woreda Manager access links.</p>
         </div>
     """, unsafe_allow_html=True)
 
-    zones = conn.execute("SELECT * FROM zones").fetchall()
-    selected_z = st.sidebar.selectbox("Select Active Zone", [dict(z) for z in zones], format_func=lambda x: x["name"])
-    
-    woredas = conn.execute("SELECT * FROM woredas WHERE zone_id = ?", (selected_z["id"],)).fetchall()
+    zone = conn.execute(
+        "SELECT * FROM zones WHERE id = ?", (user_info["unit_id"],)
+    ).fetchone()
+    woredas = conn.execute(
+        "SELECT * FROM woredas WHERE zone_id = ?", (zone["id"],)
+    ).fetchall()
+
     allocated = sum([w["fertilizer_quota"] for w in woredas]) if woredas else 0
-    remaining = selected_z["fertilizer_quota"] - allocated
+    remaining = zone["fertilizer_quota"] - allocated
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Selected Zone", selected_z["name"])
-    c2.metric("Total Zone Stock", f"{selected_z['fertilizer_quota']:,} Qtl")
+    c1.metric("Zone Name", zone["name"])
+    c2.metric("Total Zone Stock", f"{zone['fertilizer_quota']:,} Qtl")
     c3.metric("Allocated to Woredas", f"{allocated:,} Qtl")
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3 = st.tabs(["⚖️ Allocate Woreda Quotas", "➕ Register Woreda", "📊 Woreda Overview"])
+    tab1, tab2, tab3 = st.tabs(
+        ["➕ Register Woreda & Send Link", "⚖️ Cascade Woreda Quota", "📊 Woredas"]
+    )
 
     with tab1:
-        st.subheader("Set Woreda Quota Allocations")
-        if woredas:
-            with st.form("set_woreda_q_form"):
-                sel_w = st.selectbox("Select Woreda", [dict(w) for w in woredas], format_func=lambda x: f"{x['name']} (Current: {x['fertilizer_quota']} Qtl)")
-                new_w_q = st.number_input("Set Quota (Quintals)", min_value=0, max_value=selected_z["fertilizer_quota"], value=sel_w["fertilizer_quota"], step=50)
-                
-                if st.form_submit_button("Save Woreda Quota"):
-                    conn.execute("UPDATE woredas SET fertilizer_quota = ? WHERE id = ?", (new_w_q, sel_w["id"]))
-                    conn.commit()
-                    st.success(f"Woreda '{sel_w['name']}' quota updated to {new_w_q} Qtl!")
-                    st.rerun()
+        st.subheader("Register Woreda & Generate Woreda Access Link")
+        with st.form("add_w_form"):
+            w_name = st.text_input(
+                "Woreda Name", placeholder="e.g., Limmu Seka Woreda"
+            )
+            w_quota = st.number_input(
+                "Initial Quota (Quintals)", min_value=0, value=500, step=50
+            )
+            w_price = st.number_input(
+                "Fertilizer Unit Price (ETB / Qtl)",
+                min_value=1000.0,
+                value=4500.0,
+                step=100.0,
+            )
 
-    with tab2:
-        st.subheader("➕ Register New Woreda")
-        with st.form("add_woreda_form"):
-            w_name = st.text_input("Woreda Name", placeholder="e.g., Limmu Seka Woreda")
-            w_quota = st.number_input("Initial Quota (Quintals)", min_value=0, value=500, step=50)
-            w_price = st.number_input("Fertilizer Unit Price (ETB / Quintal)", min_value=1000.0, value=4500.0, step=100.0)
             if st.form_submit_button("Register Woreda") and w_name:
                 new_w_id = f"WRD-00{len(woredas)+1}"
-                conn.execute("INSERT INTO woredas VALUES (?, ?, ?, ?, ?)", (new_w_id, w_name, selected_z["id"], w_quota, w_price))
+                passcode = generate_passcode()
+                conn.execute(
+                    "INSERT INTO woredas VALUES (?, ?, ?, ?, ?, ?)",
+                    (new_w_id, w_name, zone["id"], w_quota, w_price, passcode),
+                )
                 conn.commit()
-                st.success(f"Woreda '{w_name}' registered successfully!")
+                st.success(f"Woreda '{w_name}' registered!")
                 st.rerun()
 
+        st.markdown("### 🔗 Active Woreda Registration Links & Passcodes")
+        if woredas:
+            for w in woredas:
+                w_link = f"{get_base_url()}?role=Woreda+Manager&passcode={w['reg_passcode']}&unit_id={w['id']}"
+                st.markdown(f"""
+                    <div class="link-box">
+                        <b>📍 Woreda: {w['name']}</b> | Passcode: <code>{w['reg_passcode']}</code><br>
+                        <b>Shareable Link for Woreda Manager:</b><br>
+                        <code>{w_link}</code>
+                    </div>
+                """, unsafe_allow_html=True)
+
+    with tab2:
+        if woredas:
+            with st.form("set_w_q"):
+                sel_w = st.selectbox(
+                    "Select Woreda",
+                    [dict(w) for w in woredas],
+                    format_func=lambda x: (
+                        f"{x['name']} (Current: {x['fertilizer_quota']} Qtl)"
+                    ),
+                )
+                new_w_q = st.number_input(
+                    "Assign Quota (Quintals)",
+                    min_value=0,
+                    value=sel_w["fertilizer_quota"],
+                    step=50,
+                )
+                if st.form_submit_button("Update Quota"):
+                    conn.execute(
+                        "UPDATE woredas SET fertilizer_quota = ? WHERE id = ?",
+                        (new_w_q, sel_w["id"]),
+                    )
+                    conn.commit()
+                    st.success("Updated successfully!")
+                    st.rerun()
+
     with tab3:
-        st.subheader("Woredas under " + selected_z["name"])
-        st.dataframe(pd.DataFrame([dict(w) for w in woredas]), use_container_width=True)
+        st.dataframe(
+            pd.DataFrame([dict(w) for w in woredas]), use_container_width=True
+        )
 
 # ==============================================================================
 # 3. WOREDA MANAGER ROLE
@@ -320,84 +584,107 @@ elif role == "Zonal Manager":
 elif role == "Woreda Manager":
     st.markdown("""
         <div class="hero-banner">
-            <h1>📍 Woreda Administration & Fee Manager</h1>
-            <p>Set Kebele Quotas, configure local fee items (Sport Fee, Land Tax), and assign DAs & Assistants.</p>
+            <h1>📍 Woreda Administration Portal</h1>
+            <p>Set Kebele Quotas, configure local fee items, and generate DA Worker access links.</p>
         </div>
     """, unsafe_allow_html=True)
 
-    woredas = conn.execute("SELECT * FROM woredas").fetchall()
-    selected_w = st.sidebar.selectbox("Select Active Woreda", [dict(w) for w in woredas], format_func=lambda x: x["name"])
-
-    kebeles = conn.execute("SELECT * FROM kebeles WHERE woreda_id = ?", (selected_w["id"],)).fetchall()
-    fee_items = conn.execute("SELECT * FROM fee_items WHERE woreda_id = ?", (selected_w["id"],)).fetchall()
+    woreda = conn.execute(
+        "SELECT * FROM woredas WHERE id = ?", (user_info["unit_id"],)
+    ).fetchone()
+    kebeles = conn.execute(
+        "SELECT * FROM kebeles WHERE woreda_id = ?", (woreda["id"],)
+    ).fetchall()
+    fee_items = conn.execute(
+        "SELECT * FROM fee_items WHERE woreda_id = ?", (woreda["id"],)
+    ).fetchall()
 
     allocated = sum([k["fertilizer_quota"] for k in kebeles]) if kebeles else 0
-    remaining = selected_w["fertilizer_quota"] - allocated
+    remaining = woreda["fertilizer_quota"] - allocated
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Woreda Name", selected_w["name"])
-    c2.metric("Total Stock Quota", f"{selected_w['fertilizer_quota']:,} Qtl")
-    c3.metric("Fertilizer Price / Qtl", f"{selected_w['fertilizer_price_per_qtl']:,.2f} ETB")
+    c1.metric("Woreda Name", woreda["name"])
+    c2.metric("Total Woreda Stock", f"{woreda['fertilizer_quota']:,} Qtl")
+    c3.metric("Fertilizer Price / Qtl", f"{woreda['fertilizer_price_per_qtl']:,.2f} ETB")
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs(["💳 Configure Fee Schedule", "⚖️ Cascade Kebele Quota", "➕ Register Kebele & Staff", "📊 Woreda Master View"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "➕ Register Kebele & Send DA Link",
+        "💳 Configure Fees",
+        "⚖️ Cascade Kebele Quota",
+        "📊 Kebeles",
+    ])
 
     with tab1:
-        st.subheader("💳 Configure Mandatory Woreda Fee Items")
-        st.caption("These fees (e.g., Sport Fee, Land Tax, Registration Fee) will be enforced by DA Officers.")
-        
-        col_f1, col_f2 = st.columns([2, 1])
-        with col_f1:
-            with st.form("add_fee_item_form"):
-                fee_name_in = st.text_input("Fee Description", placeholder="e.g., ስፖርት ክፍያ (Sport Fee)")
-                fee_amount_in = st.number_input("Amount per Farmer (ETB)", min_value=0.0, value=150.0, step=10.0)
-                if st.form_submit_button("Add Fee Item to Schedule") and fee_name_in:
-                    conn.execute("INSERT INTO fee_items (woreda_id, fee_name, amount) VALUES (?, ?, ?)", (selected_w["id"], fee_name_in, fee_amount_in))
-                    conn.commit()
-                    st.success(f"Added '{fee_name_in}' ({fee_amount_in} ETB) to mandatory fees.")
-                    st.rerun()
+        st.subheader("Register Kebele & Generate DA Worker Link")
+        with st.form("add_k_form"):
+            c_a, c_b = st.columns(2)
+            k_name = c_a.text_input("Kebele Name", placeholder="e.g., Sombo Kebele")
+            da_name = c_a.text_input("Lead DA Worker", placeholder="e.g., Mulugeta Kebede")
+            assistant_name = c_b.text_input("Assistant DA", placeholder="e.g., Tigist Hailu")
+            k_quota = c_b.number_input("Initial Quota (Quintals)", min_value=0, value=200, step=10)
 
-        with col_f2:
-            st.write("#### Active Woreda Fee List")
-            if fee_items:
-                df_f = pd.DataFrame([dict(f) for f in fee_items])
-                st.dataframe(df_f[["fee_name", "amount"]], use_container_width=True, hide_index=True)
-                st.info(f"**Total Fixed Fees / Farmer:** {sum([f['amount'] for f in fee_items]):,.2f} ETB")
+            if st.form_submit_button("Register Kebele") and k_name:
+                new_k_id = f"KEB-00{len(kebeles)+1}"
+                passcode = generate_passcode()
+                conn.execute(
+                    "INSERT INTO kebeles VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (new_k_id, k_name, woreda["id"], da_name, assistant_name, k_quota, passcode),
+                )
+                conn.commit()
+                st.success(f"Kebele '{k_name}' registered!")
+                st.rerun()
+
+        st.markdown("### 🔗 Active DA Worker Registration Links & Passcodes")
+        if kebeles:
+            for k in kebeles:
+                da_link = f"{get_base_url()}?role=DA+Worker+(Kebele+Level)&passcode={k['reg_passcode']}&unit_id={k['id']}"
+                st.markdown(f"""
+                    <div class="link-box">
+                        <b>📍 Kebele: {k['name']}</b> (Lead DA: {k['da_name']}) | Passcode: <code>{k['reg_passcode']}</code><br>
+                        <b>Shareable Link for DA Worker:</b><br>
+                        <code>{da_link}</code>
+                    </div>
+                """, unsafe_allow_html=True)
 
     with tab2:
-        st.subheader("Assign Kebele Fertilizer Quotas")
-        if kebeles:
-            with st.form("set_kebele_q_form"):
-                sel_k = st.selectbox("Select Kebele", [dict(k) for k in kebeles], format_func=lambda x: f"{x['name']} (DA: {x['da_name']} | Quota: {x['fertilizer_quota']} Qtl)")
-                new_k_q = st.number_input("Set Quota (Quintals)", min_value=0, max_value=selected_w["fertilizer_quota"], value=sel_k["fertilizer_quota"], step=10)
-                if st.form_submit_button("Save Kebele Quota"):
-                    conn.execute("UPDATE kebeles SET fertilizer_quota = ? WHERE id = ?", (new_k_q, sel_k["id"]))
-                    conn.commit()
-                    st.success(f"Quota for {sel_k['name']} set to {new_k_q} Qtl!")
-                    st.rerun()
+        st.subheader("Configure Mandatory Fee Items")
+        with st.form("add_fee_form"):
+            fee_name_in = st.text_input("Fee Name", placeholder="e.g., ስፖርት ክፍያ (Sport Fee)")
+            fee_amount_in = st.number_input("Amount (ETB)", min_value=0.0, value=150.0, step=10.0)
+            if st.form_submit_button("Save Fee Item") and fee_name_in:
+                conn.execute(
+                    "INSERT INTO fee_items (woreda_id, fee_name, amount) VALUES (?, ?, ?)",
+                    (woreda["id"], fee_name_in, fee_amount_in),
+                )
+                conn.commit()
+                st.success("Fee item added!")
+                st.rerun()
+
+        if fee_items:
+            st.dataframe(pd.DataFrame([dict(f) for f in fee_items]), use_container_width=True)
 
     with tab3:
-        st.subheader("➕ Register Kebele with Lead DA & Assistant")
-        with st.form("add_kebele_staff_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                k_name = st.text_input("Kebele Name", placeholder="e.g., Yebu Kebele")
-                da_name = st.text_input("Assigned Development Agent (DA)", placeholder="e.g., Alemayehu Tadesse")
-            with col2:
-                assistant_name = st.text_input("Assigned Assistant DA", placeholder="e.g., Getachew Bekele")
-                k_quota = st.number_input("Initial Allocated Quota (Quintals)", min_value=0, value=200, step=10)
-
-            if st.form_submit_button("Register Kebele & Staff"):
-                if k_name and da_name and assistant_name:
-                    new_k_id = f"KEB-00{len(kebeles)+1}"
-                    conn.execute("INSERT INTO kebeles VALUES (?, ?, ?, ?, ?, ?)", (new_k_id, k_name, selected_w["id"], da_name, assistant_name, k_quota))
+        if kebeles:
+            with st.form("set_k_q"):
+                sel_k = st.selectbox(
+                    "Select Kebele",
+                    [dict(k) for k in kebeles],
+                    format_func=lambda x: f"{x['name']} (Current: {x['fertilizer_quota']} Qtl)",
+                )
+                new_k_q = st.number_input(
+                    "Set Quota (Quintals)", min_value=0, value=sel_k["fertilizer_quota"], step=10
+                )
+                if st.form_submit_button("Update Quota"):
+                    conn.execute(
+                        "UPDATE kebeles SET fertilizer_quota = ? WHERE id = ?", (new_k_q, sel_k["id"])
+                    )
                     conn.commit()
-                    st.success(f"Kebele '{k_name}' registered with DA {da_name} and Assistant {assistant_name}.")
+                    st.success("Quota updated!")
                     st.rerun()
 
     with tab4:
-        st.subheader("Kebele Directory under " + selected_w["name"])
         st.dataframe(pd.DataFrame([dict(k) for k in kebeles]), use_container_width=True)
 
 # ==============================================================================
@@ -406,201 +693,121 @@ elif role == "Woreda Manager":
 elif role == "DA Worker (Kebele Level)":
     st.markdown("""
         <div class="hero-banner">
-            <h1>🌾 Field Operations & DA Workstation</h1>
-            <p>Register local farmers, verify multi-item fees (Sport, Tax, Fertilizer), and build dynamic group clusters.</p>
+            <h1>🌾 DA Field Workstation</h1>
+            <p>Register farmers, check fee items, and form custom distribution groups.</p>
         </div>
     """, unsafe_allow_html=True)
 
-    kebeles = conn.execute("SELECT k.*, w.fertilizer_price_per_qtl, w.id as woreda_id FROM kebeles k JOIN woredas w ON k.woreda_id = w.id").fetchall()
-    selected_k = st.sidebar.selectbox("Select Active Kebele Workstation", [dict(k) for k in kebeles], format_func=lambda x: f"{x['name']} (DA: {x['da_name']})")
+    kebele = conn.execute(
+        "SELECT k.*, w.fertilizer_price_per_qtl, w.id as woreda_id FROM kebeles k JOIN woredas w ON k.woreda_id = w.id WHERE k.id = ?",
+        (user_info["unit_id"],),
+    ).fetchone()
 
-    # Fetch fee items
-    fee_items = conn.execute("SELECT * FROM fee_items WHERE woreda_id = ?", (selected_k["woreda_id"],)).fetchall()
+    fee_items = conn.execute(
+        "SELECT * FROM fee_items WHERE woreda_id = ?", (kebele["woreda_id"],)
+    ).fetchall()
     fixed_fees_total = sum([f["amount"] for f in fee_items]) if fee_items else 0.0
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Kebele Name", selected_k["name"])
-    c2.metric("Assigned DA", selected_k["da_name"])
-    c3.metric("Assistant DA", selected_k["assistant_name"])
-    c4.metric("Kebele Quota Stock", f"{selected_k['fertilizer_quota']:,} Qtl")
+    c1.metric("Kebele Name", kebele["name"])
+    c2.metric("DA Lead", kebele["da_name"])
+    c3.metric("Assistant DA", kebele["assistant_name"])
+    c4.metric("Kebele Quota Stock", f"{kebele['fertilizer_quota']:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs(["📝 Register Farmer with Fee Status", "💳 Fee Calculation & Verification", "🎲 Auto-Group Generation", "📋 Kebele Distribution Manifest"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📝 Register Farmer",
+        "💳 Verification & Fees",
+        "🎲 Dynamic Grouping",
+        "📋 Distribution List",
+    ])
 
-    # --- TAB 1: REGISTER FARMER WITH FEE CHECKBOXES ---
     with tab1:
-        st.subheader("📝 Register New Farmer & Record Initial Fee Verification")
-        st.caption("Select paid items directly during registration.")
-
-        with st.form("reg_farmer_da_form"):
+        st.subheader("Register Farmer & Initial Fee Checklist")
+        with st.form("da_reg_farmer"):
             col1, col2 = st.columns(2)
-            with col1:
-                f_name = st.text_input("Farmer Full Name", placeholder="e.g., Taye Bogale")
-                f_nat_id = st.text_input("National ID (Unique)", placeholder="e.g., ETH-99887766")
-                f_phone = st.text_input("Phone Number", placeholder="+2519...")
-                f_qtl = st.number_input("Requested Fertilizer (Quintals)", min_value=0.5, value=1.0, step=0.5)
+            f_name = col1.text_input("Full Name")
+            f_nat_id = col1.text_input("National ID")
+            f_phone = col1.text_input("Phone Number")
+            f_qtl = col1.number_input("Requested Fertilizer (Qtl)", min_value=0.5, value=1.0, step=0.5)
 
-            with col2:
-                f_village = st.text_input("Village / Got Name", placeholder="e.g., Gudeta")
-                f_land = st.number_input("Farmland Area (Hectares)", min_value=0.1, value=1.5, step=0.1)
-                st.markdown("##### 💳 Fee Payment Verification Checkbox")
-                f_paid_fert = st.checkbox("Fertilizer Payment Complete?", value=False)
-                f_paid_sport = st.checkbox("ስፖርት ክፍያ (Sport Fee Paid)?", value=False)
-                f_paid_tax = st.checkbox("የመሬት ግብር (Land Tax Paid)?", value=False)
-                f_paid_other = st.checkbox("Other Administrative Fees Paid?", value=False)
-
-            if st.form_submit_button("Submit Farmer Registration"):
-                if f_name and f_nat_id:
-                    # Fee verified only if all paid
-                    all_verified = 1 if (f_paid_fert and f_paid_sport and f_paid_tax and f_paid_other) else 0
-                    status_text = "In Queue" if all_verified else "Pending Fees"
-                    
-                    try:
-                        new_f_id = f"FAR-00{conn.execute('SELECT COUNT(*) FROM farmers').fetchone()[0] + 1}"
-                        conn.execute("""
-                            INSERT INTO farmers (id, national_id, name, kebele_id, village, land_size, phone, requested_quintals, 
-                                                 fertilizer_paid, sport_fee_paid, tax_paid, other_fee_paid, fee_verified, status)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (new_f_id, f_nat_id, f_name, selected_k["id"], f_village, f_land, f_phone, f_qtl,
-                              1 if f_paid_fert else 0, 1 if f_paid_sport else 0, 1 if f_paid_tax else 0, 1 if f_paid_other else 0,
-                              all_verified, status_text))
-                        conn.commit()
-                        st.success(f"Farmer '{f_name}' registered successfully! (Status: {status_text})")
-                        st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("❌ National ID already registered!")
-                else:
-                    st.error("Full Name and National ID are required.")
-
-    # --- TAB 2: DETAILED FEE CALCULATOR & VERIFICATION DASHBOARD ---
-    with tab2:
-        st.subheader("💰 Individual Fee Calculation & Verification Dashboard")
-        
-        # Fee Breakdown Calculation Card
-        st.markdown(f"""
-            > **🧮 Fee Reference Rates for {selected_k['name']}:**
-            > * **Fertilizer Price:** `{selected_k['fertilizer_price_per_qtl']:,.2f} ETB` per Quintal
-            > * **Woreda Mandatory Fixed Fees:** `{fixed_fees_total:,.2f} ETB` (Includes Sport Fee, Tax, Service Charge)
-        """)
-
-        farmers_list = conn.execute("SELECT * FROM farmers WHERE kebele_id = ?", (selected_k["id"],)).fetchall()
-
-        if farmers_list:
-            df_f_display = pd.DataFrame([dict(f) for f in farmers_list])
+            f_village = col2.text_input("Village / Got")
+            f_land = col2.number_input("Land Size (Ha)", min_value=0.1, value=1.5, step=0.1)
             
-            # Add calculated fee column
-            df_f_display["Total_Due_ETB"] = (df_f_display["requested_quintals"] * selected_k["fertilizer_price_per_qtl"]) + fixed_fees_total
-            df_f_display["All_Fees_Verified"] = df_f_display["fee_verified"].apply(lambda x: "✅ YES (In Queue)" if x == 1 else "❌ NO (Pending)")
-            
-            st.dataframe(
-                df_f_display[["id", "national_id", "name", "village", "requested_quintals", "Total_Due_ETB", "fertilizer_paid", "sport_fee_paid", "tax_paid", "other_fee_paid", "All_Fees_Verified"]],
-                use_container_width=True, hide_index=True
-            )
+            f_paid_fert = col2.checkbox("Fertilizer Paid")
+            f_paid_sport = col2.checkbox("ስፖርት ክፍያ (Sport Fee Paid)")
+            f_paid_tax = col2.checkbox("የመሬት ግብር (Land Tax Paid)")
+            f_paid_other = col2.checkbox("Other Fees Paid")
 
-            st.markdown("---")
-            st.write("### Update Specific Farmer Payment Checklists")
-
-            col_sel, col_chk = st.columns([1, 2])
-            with col_sel:
-                selected_fid = st.selectbox(
-                    "Select Farmer Record to Update",
-                    [f["id"] for f in farmers_list],
-                    format_func=lambda x: f"{x} - {next(f['name'] for f in farmers_list if f['id'] == x)}"
-                )
-                f_curr = next(f for f in farmers_list if f["id"] == selected_fid)
-                total_farmer_due = (f_curr["requested_quintals"] * selected_k["fertilizer_price_per_qtl"]) + fixed_fees_total
+            if st.form_submit_button("Register Farmer") and f_name and f_nat_id:
+                all_v = 1 if (f_paid_fert and f_paid_sport and f_paid_tax and f_paid_other) else 0
+                status_str = "In Queue" if all_v else "Pending Fees"
+                new_f_id = f"FAR-00{conn.execute('SELECT COUNT(*) FROM farmers').fetchone()[0] + 1}"
                 
-                st.info(f"**Selected:** {f_curr['name']}\n\n**Quintals Requested:** {f_curr['requested_quintals']} Qtl\n\n**Total Payment Required:** {total_farmer_due:,.2f} ETB")
-
-            with col_chk:
-                with st.form("update_fee_checklist_form"):
-                    st.write("#### Check Received Payment Items:")
-                    chk_fert = st.checkbox("Fertilizer Payment Received", value=bool(f_curr["fertilizer_paid"]))
-                    chk_sport = st.checkbox("ስፖርት ክፍያ (Sport Fee) Received", value=bool(f_curr["sport_fee_paid"]))
-                    chk_tax = st.checkbox("የመሬት ግብር (Land Tax) Received", value=bool(f_curr["tax_paid"]))
-                    chk_other = st.checkbox("Other Administrative Fees Received", value=bool(f_curr["other_fee_paid"]))
-
-                    if st.form_submit_button("Save & Update Payment Verification Status"):
-                        all_paid = 1 if (chk_fert and chk_sport and chk_tax and chk_other) else 0
-                        status_update = "In Queue" if all_paid else "Pending Fees"
-                        
-                        conn.execute("""
-                            UPDATE farmers SET fertilizer_paid = ?, sport_fee_paid = ?, tax_paid = ?, other_fee_paid = ?, 
-                                               fee_verified = ?, status = ? WHERE id = ?
-                        """, (1 if chk_fert else 0, 1 if chk_sport else 0, 1 if chk_tax else 0, 1 if chk_other else 0,
-                              all_paid, status_update, selected_fid))
-                        conn.commit()
-                        st.success(f"Payment records updated for {f_curr['name']}. Status: {status_update}")
-                        st.rerun()
-
-    # --- TAB 3: CUSTOMIZABLE AUTO-GROUPING (5, 7, 10 MEMBERS) ---
-    with tab3:
-        st.subheader("🎲 Custom-Sized Group Generation Engine")
-        st.caption("🔒 Strict Enforcement: Only farmers who have paid ALL fees (Fertilizer, Sport, Tax, Other) are eligible for group placement.")
-
-        eligible_farmers = conn.execute("SELECT * FROM farmers WHERE kebele_id = ? AND fee_verified = 1", (selected_k["id"],)).fetchall()
-
-        if not eligible_farmers:
-            st.warning("⚠️ No fee-verified farmers currently available to form groups.")
-        else:
-            col_g1, col_g2 = st.columns([1, 2])
-            with col_g1:
-                st.write("#### ⚙️ Group Configuration")
-                group_size = st.number_input(
-                    "Select Group Size (Farmers / Group)", 
-                    min_value=2, max_value=20, value=5, step=1,
-                    help="Default is 5. You can set it to 5, 7, 10, or any custom cluster size."
-                )
-
-                if st.button("Generate & Assign Farmers to Groups", use_container_width=True):
-                    f_list = [dict(f) for f in eligible_farmers]
-                    
-                    group_num = 1
-                    for i in range(0, len(f_list), group_size):
-                        batch = f_list[i:i + group_size]
-                        for f in batch:
-                            conn.execute("UPDATE farmers SET group_id = ?, status = 'Grouped' WHERE id = ?", (group_num, f["id"]))
-                        group_num += 1
+                try:
+                    conn.execute("""
+                        INSERT INTO farmers (id, national_id, name, kebele_id, village, land_size, phone, requested_quintals, 
+                                             fertilizer_paid, sport_fee_paid, tax_paid, other_fee_paid, fee_verified, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (new_f_id, f_nat_id, f_name, kebele["id"], f_village, f_land, f_phone, f_qtl,
+                          1 if f_paid_fert else 0, 1 if f_paid_sport else 0, 1 if f_paid_tax else 0, 1 if f_paid_other else 0,
+                          all_v, status_str))
                     conn.commit()
-                    st.success(f"Successfully generated groups of size {group_size}!")
+                    st.success(f"Farmer '{f_name}' registered!")
+                    st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("National ID already exists!")
+
+    with tab2:
+        st.subheader("Fee Status & Detailed Calculation")
+        farmers_list = conn.execute("SELECT * FROM farmers WHERE kebele_id = ?", (kebele["id"],)).fetchall()
+        
+        if farmers_list:
+            df_f = pd.DataFrame([dict(f) for f in farmers_list])
+            df_f["Total_Due_ETB"] = (df_f["requested_quintals"] * kebele["fertilizer_price_per_qtl"]) + fixed_fees_total
+            st.dataframe(df_f[["id", "national_id", "name", "village", "requested_quintals", "Total_Due_ETB", "fee_verified", "status"]], use_container_width=True)
+
+            selected_fid = st.selectbox("Select Farmer to Update Checklist", [f["id"] for f in farmers_list])
+            f_curr = next(f for f in farmers_list if f["id"] == selected_fid)
+
+            with st.form("update_f_fee"):
+                chk_fert = st.checkbox("Fertilizer Paid", value=bool(f_curr["fertilizer_paid"]))
+                chk_sport = st.checkbox("Sport Fee Paid", value=bool(f_curr["sport_fee_paid"]))
+                chk_tax = st.checkbox("Land Tax Paid", value=bool(f_curr["tax_paid"]))
+                chk_other = st.checkbox("Other Fees Paid", value=bool(f_curr["other_fee_paid"]))
+
+                if st.form_submit_button("Update Status"):
+                    all_p = 1 if (chk_fert and chk_sport and chk_tax and chk_other) else 0
+                    st_str = "In Queue" if all_p else "Pending Fees"
+                    conn.execute("""
+                        UPDATE farmers SET fertilizer_paid = ?, sport_fee_paid = ?, tax_paid = ?, other_fee_paid = ?, 
+                                           fee_verified = ?, status = ? WHERE id = ?
+                    """, (1 if chk_fert else 0, 1 if chk_sport else 0, 1 if chk_tax else 0, 1 if chk_other else 0, all_p, st_str, selected_fid))
+                    conn.commit()
+                    st.success("Updated fee status!")
                     st.rerun()
 
-            with col_g2:
-                st.write("#### Active Distribution Groups")
-                groups_db = conn.execute("SELECT DISTINCT group_id FROM farmers WHERE kebele_id = ? AND group_id IS NOT NULL ORDER BY group_id", (selected_k["id"],)).fetchall()
-                
-                if groups_db:
-                    for g_row in groups_db:
-                        g_id = g_row["group_id"]
-                        members = conn.execute("SELECT * FROM farmers WHERE kebele_id = ? AND group_id = ?", (selected_k["id"], g_id)).fetchall()
-                        df_members = pd.DataFrame([dict(m) for m in members])
-                        
-                        with st.expander(f"📦 Group Batch #{g_id} ({len(members)} Farmers Assigned)", expanded=True):
-                            st.dataframe(
-                                df_members[["id", "national_id", "name", "phone", "village", "requested_quintals"]],
-                                use_container_width=True, hide_index=True
-                            )
-                            
-                            csv_buf = StringIO()
-                            df_members.to_csv(csv_buf, index=False, encoding='utf-8')
-                            st.download_button(
-                                label=f"📥 Download Group #{g_id} Manifest (CSV)",
-                                data=csv_buf.getvalue(),
-                                file_name=f"group_{g_id}_manifest.csv",
-                                mime="text/csv",
-                                key=f"dl_btn_{g_id}"
-                            )
-
-    # --- TAB 4: KEBELE DISTRIBUTION MANIFEST ---
-    with tab4:
-        st.subheader("📋 Complete Kebele Beneficiary Master Manifest")
-        all_k_farmers = conn.execute("SELECT * FROM farmers WHERE kebele_id = ?", (selected_k["id"],)).fetchall()
+    with tab3:
+        st.subheader("Dynamic Grouping Engine (Fee-Paid Only)")
+        group_size = st.number_input("Select Group Size (5, 7, 10, etc.)", min_value=2, max_value=20, value=5)
         
-        if all_k_farmers:
-            df_master = pd.DataFrame([dict(f) for f in all_k_farmers])
-            st.dataframe(
-                df_master[["id", "national_id", "name", "village", "phone", "requested_quintals", "fee_verified", "status", "group_id"]],
-                use_container_width=True, hide_index=True
-            )
+        eligible = conn.execute("SELECT * FROM farmers WHERE kebele_id = ? AND fee_verified = 1", (kebele["id"],)).fetchall()
+        
+        if st.button("Form Groups") and eligible:
+            f_list = [dict(f) for f in eligible]
+            g_num = 1
+            for i in range(0, len(f_list), group_size):
+                batch = f_list[i:i + group_size]
+                for f in batch:
+                    conn.execute("UPDATE farmers SET group_id = ?, status = 'Grouped' WHERE id = ?", (g_num, f["id"]))
+                g_num += 1
+            conn.commit()
+            st.success("Groups formed successfully!")
+            st.rerun()
+
+    with tab4:
+        all_k = conn.execute("SELECT * FROM farmers WHERE kebele_id = ?", (kebele["id"],)).fetchall()
+        if all_k:
+            st.dataframe(pd.DataFrame([dict(f) for f in all_k]), use_container_width=True)
 
 conn.close()
