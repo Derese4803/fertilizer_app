@@ -2,12 +2,11 @@ import hashlib
 import random
 import sqlite3
 import string
-from io import StringIO
 import pandas as pd
 import streamlit as st
 
 # ==================== DATABASE CONFIGURATION ====================
-DB_FILE = "fertilizer_cascade_auth_v5.db"
+DB_FILE = "fertilizer_cascade_auth_v7.db"
 
 
 def get_db_connection():
@@ -29,15 +28,17 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute("PRAGMA foreign_keys = ON;")
 
-    # 1. Users & Passcodes Table
+    # 1. Users Table (Unique across username + role + unit_id)
+    # Allows identical usernames across DIFFERENT links/units
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
+            username TEXT NOT NULL,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL,
             unit_id TEXT NOT NULL,
-            reg_passcode TEXT NOT NULL
+            reg_passcode TEXT NOT NULL,
+            UNIQUE(username, role, unit_id)
         )
     """)
 
@@ -118,47 +119,21 @@ def init_db():
         )
     """)
 
-    # Seed Default Root Admin and Sample Data
-    cursor.execute(
-        "INSERT OR IGNORE INTO regions VALUES ('REG-001', 'Oromia Region',"
-        " 50000)"
-    )
+    # Seed Default Root Data
+    cursor.execute("INSERT OR IGNORE INTO regions VALUES ('REG-001', 'Oromia Region', 50000)")
 
-    # Seed Root Admin User
     admin_pw = hash_password("admin123")
     cursor.execute(
-        "INSERT OR IGNORE INTO users (username, password_hash, role, unit_id,"
-        " reg_passcode) VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO users (username, password_hash, role, unit_id, reg_passcode) VALUES (?, ?, ?, ?, ?)",
         ("reg_admin", admin_pw, "Regional Manager", "REG-001", "000000"),
     )
 
-    # Seed Default Zone
-    cursor.execute(
-        "INSERT OR IGNORE INTO zones VALUES ('ZN-001', 'Jimma Zone', 'REG-001',"
-        " 15000, '123456')"
-    )
+    cursor.execute("INSERT OR IGNORE INTO zones VALUES ('ZN-001', 'Jimma Zone', 'REG-001', 15000, '123456')")
+    cursor.execute("INSERT OR IGNORE INTO woredas VALUES ('WRD-001', 'Manna Woreda', 'ZN-001', 5000, 4500.0, '654321')")
+    cursor.execute("INSERT OR IGNORE INTO kebeles VALUES ('KEB-001', 'Yebu Kebele', 'WRD-001', 'Alemayehu Tadesse', 'Getachew Bekele', 1500, '112233')")
 
-    # Seed Default Woreda
-    cursor.execute(
-        "INSERT OR IGNORE INTO woredas VALUES ('WRD-001', 'Manna Woreda',"
-        " 'ZN-001', 5000, 4500.0, '654321')"
-    )
-
-    # Seed Default Kebele
-    cursor.execute(
-        "INSERT OR IGNORE INTO kebeles VALUES ('KEB-001', 'Yebu Kebele',"
-        " 'WRD-001', 'Alemayehu Tadesse', 'Getachew Bekele', 1500, '112233')"
-    )
-
-    # Fees
-    cursor.execute(
-        "INSERT OR IGNORE INTO fee_items (id, woreda_id, fee_name, amount)"
-        " VALUES (1, 'WRD-001', 'ስፖርት ክፍያ (Sport Fee)', 150.0)"
-    )
-    cursor.execute(
-        "INSERT OR IGNORE INTO fee_items (id, woreda_id, fee_name, amount)"
-        " VALUES (2, 'WRD-001', 'የመሬት ግብር (Land Tax)', 350.0)"
-    )
+    cursor.execute("INSERT OR IGNORE INTO fee_items (id, woreda_id, fee_name, amount) VALUES (1, 'WRD-001', 'ስፖርት ክፍያ (Sport Fee)', 150.0)")
+    cursor.execute("INSERT OR IGNORE INTO fee_items (id, woreda_id, fee_name, amount) VALUES (2, 'WRD-001', 'የመሬት ግብር (Land Tax)', 350.0)")
 
     conn.commit()
     conn.close()
@@ -217,13 +192,13 @@ def get_base_url():
         return "http://localhost:8501"
 
 
-# Initialize Session State
+# Session State Management
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "user_info" not in st.session_state:
     st.session_state["user_info"] = None
 
-# Query parameters for invite links
+# Query parameters from shareable links
 query_params = st.query_params
 url_role = query_params.get("role", None)
 url_passcode = query_params.get("passcode", None)
@@ -246,6 +221,13 @@ if not st.session_state["authenticated"]:
     with auth_tab1:
         st.subheader("Login to Your Administrative Portal")
         with st.form("login_form"):
+            login_role = st.selectbox(
+                "Select Access Role",
+                ["Regional Manager", "Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"],
+                index=["Regional Manager", "Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"].index(url_role)
+                if url_role in ["Regional Manager", "Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"]
+                else 0
+            )
             login_username = st.text_input("Username")
             login_password = st.text_input("Password", type="password")
             submit_login = st.form_submit_button("Sign In")
@@ -253,51 +235,34 @@ if not st.session_state["authenticated"]:
             if submit_login:
                 hashed = hash_password(login_password)
                 user = conn.execute(
-                    "SELECT * FROM users WHERE username = ? AND password_hash"
-                    " = ?",
-                    (login_username, hashed),
+                    "SELECT * FROM users WHERE username = ? AND password_hash = ? AND role = ?",
+                    (login_username, hashed, login_role),
                 ).fetchone()
 
                 if user:
                     st.session_state["authenticated"] = True
                     st.session_state["user_info"] = dict(user)
-                    st.success(
-                        f"Welcome back, {user['username']} ({user['role']})!"
-                    )
+                    st.success(f"Welcome back, {user['username']} ({user['role']})!")
                     st.rerun()
                 else:
-                    st.error("❌ Invalid Username or Password")
+                    st.error("❌ Invalid Username, Password, or Role selection!")
 
     # REGISTER TAB
     with auth_tab2:
         st.subheader("Register Unit Manager Account")
         if url_passcode:
-            st.info(
-                f"🔗 Invited via Link! Preset Role: **{url_role}** | Passcode:"
-                f" `{url_passcode}`"
-            )
+            st.info(f"🔗 Access Link Detected! Role: **{url_role}** | Passcode: `{url_passcode}`")
 
         with st.form("register_form"):
-            reg_username = st.text_input("Choose Username")
-            reg_password = st.text_input("Choose Password", type="password")
-
             target_role = st.selectbox(
                 "Select Access Role",
-                [
-                    "Zonal Manager",
-                    "Woreda Manager",
-                    "DA Worker (Kebele Level)",
-                ],
-                index=[
-                    "Zonal Manager",
-                    "Woreda Manager",
-                    "DA Worker (Kebele Level)",
-                ].index(url_role)
-                if url_role
-                and url_role
-                in ["Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"]
+                ["Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"],
+                index=["Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"].index(url_role)
+                if url_role in ["Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"]
                 else 0,
             )
+            reg_username = st.text_input("Choose Username")
+            reg_password = st.text_input("Choose Password", type="password")
 
             reg_passcode_input = st.text_input(
                 "6-Digit Registration Passcode",
@@ -309,23 +274,15 @@ if not st.session_state["authenticated"]:
 
             if submit_reg:
                 if reg_username and reg_password and reg_passcode_input:
-                    # Validate passcode against target entity table
                     unit = None
+                    unit_name = "Selected Unit"
+                    
                     if target_role == "Zonal Manager":
-                        unit = conn.execute(
-                            "SELECT id FROM zones WHERE reg_passcode = ?",
-                            (reg_passcode_input,),
-                        ).fetchone()
+                        unit = conn.execute("SELECT id, name FROM zones WHERE reg_passcode = ?", (reg_passcode_input,)).fetchone()
                     elif target_role == "Woreda Manager":
-                        unit = conn.execute(
-                            "SELECT id FROM woredas WHERE reg_passcode = ?",
-                            (reg_passcode_input,),
-                        ).fetchone()
+                        unit = conn.execute("SELECT id, name FROM woredas WHERE reg_passcode = ?", (reg_passcode_input,)).fetchone()
                     elif target_role == "DA Worker (Kebele Level)":
-                        unit = conn.execute(
-                            "SELECT id FROM kebeles WHERE reg_passcode = ?",
-                            (reg_passcode_input,),
-                        ).fetchone()
+                        unit = conn.execute("SELECT id, name FROM kebeles WHERE reg_passcode = ?", (reg_passcode_input,)).fetchone()
 
                     if unit:
                         try:
@@ -333,32 +290,17 @@ if not st.session_state["authenticated"]:
                                 """
                                 INSERT INTO users (username, password_hash, role, unit_id, reg_passcode)
                                 VALUES (?, ?, ?, ?, ?)
-                            """,
-                                (
-                                    reg_username,
-                                    hash_password(reg_password),
-                                    target_role,
-                                    unit["id"],
-                                    reg_passcode_input,
-                                ),
+                                """,
+                                (reg_username, hash_password(reg_password), target_role, unit["id"], reg_passcode_input),
                             )
                             conn.commit()
-                            st.success(
-                                "✅ Registration successful! Please log in under"
-                                " the 'Login' tab."
-                            )
+                            st.success(f"✅ Account for '{reg_username}' registered successfully under {unit['name']}! You can now log in.")
                         except sqlite3.IntegrityError:
-                            st.error(
-                                "❌ Username already exists. Please choose"
-                                " another."
-                            )
+                            st.error(f"❌ Username '{reg_username}' is already registered for this specific unit ({unit['name']}). Duplicate usernames are only allowed across DIFFERENT units/links!")
                     else:
-                        st.error(
-                            "❌ Invalid Registration Passcode for the selected"
-                            " Role!"
-                        )
+                        st.error("❌ Invalid Registration Passcode for the selected Role!")
                 else:
-                    st.error("Please fill in all fields.")
+                    st.error("Please fill in all required fields.")
 
     st.stop()
 
@@ -366,8 +308,7 @@ if not st.session_state["authenticated"]:
 user_info = st.session_state["user_info"]
 role = user_info["role"]
 
-# Sidebar Profile Header
-st.sidebar.markdown(f"### 👤 Logged in: **{user_info['username']}**")
+st.sidebar.markdown(f"### 👤 Active User: **{user_info['username']}**")
 st.sidebar.caption(f"Role: **{role}**")
 if st.sidebar.button("🔒 Logout"):
     st.session_state["authenticated"] = False
@@ -387,12 +328,8 @@ if role == "Regional Manager":
         </div>
     """, unsafe_allow_html=True)
 
-    region = conn.execute(
-        "SELECT * FROM regions WHERE id = ?", (user_info["unit_id"],)
-    ).fetchone()
-    zones = conn.execute(
-        "SELECT * FROM zones WHERE region_id = ?", (region["id"],)
-    ).fetchall()
+    region = conn.execute("SELECT * FROM regions WHERE id = ?", (user_info["unit_id"],)).fetchone()
+    zones = conn.execute("SELECT * FROM zones WHERE region_id = ?", (region["id"],)).fetchall()
 
     allocated = sum([z["fertilizer_quota"] for z in zones]) if zones else 0
     remaining = region["total_quota"] - allocated
@@ -404,19 +341,13 @@ if role == "Regional Manager":
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3 = st.tabs(
-        ["➕ Register Zone & Send Link", "⚖️ Cascade Zonal Quotas", "📊 Hierarchy"]
-    )
+    tab1, tab2, tab3 = st.tabs(["➕ Register Zone & Link Selector", "⚖️ Cascade Zonal Quotas", "📊 Hierarchy"])
 
     with tab1:
-        st.subheader("Register Zone & Generate Zonal Manager Access Link")
+        st.subheader("1. Register New Zone")
         with st.form("reg_zone_form"):
-            z_name = st.text_input(
-                "Zone Name", placeholder="e.g., East Hararghe Zone"
-            )
-            z_quota = st.number_input(
-                "Initial Quota (Quintals)", min_value=0, value=1000, step=100
-            )
+            z_name = st.text_input("Zone Name", placeholder="e.g., East Hararghe Zone")
+            z_quota = st.number_input("Initial Quota (Quintals)", min_value=0, value=1000, step=100)
 
             if st.form_submit_button("Register Zone") and z_name:
                 new_z_id = f"ZN-00{len(zones)+1}"
@@ -429,17 +360,26 @@ if role == "Regional Manager":
                 st.success(f"Zone '{z_name}' registered successfully!")
                 st.rerun()
 
-        st.markdown("### 🔗 Active Zonal Registration Links & Passcodes")
+        st.markdown("---")
+        st.subheader("2. 🔗 Select Zone to View Shareable Link")
         if zones:
-            for z in zones:
-                z_link = f"{get_base_url()}?role=Zonal+Manager&passcode={z['reg_passcode']}&unit_id={z['id']}"
-                st.markdown(f"""
-                    <div class="link-box">
-                        <b>📍 Zone: {z['name']}</b> | Passcode: <code>{z['reg_passcode']}</code><br>
-                        <b>Shareable Link for Zonal Manager:</b><br>
-                        <code>{z_link}</code>
-                    </div>
-                """, unsafe_allow_html=True)
+            selected_z_item = st.selectbox(
+                "Select a Zone from the list:",
+                [dict(z) for z in zones],
+                format_func=lambda x: f"📍 {x['name']} (ID: {x['id']})"
+            )
+            
+            z_link = f"{get_base_url()}?role=Zonal+Manager&passcode={selected_z_item['reg_passcode']}&unit_id={selected_z_item['id']}"
+            
+            st.markdown(f"""
+                <div class="link-box">
+                    <h4>📍 Zone: {selected_z_item['name']}</h4>
+                    <p><b>6-Digit Registration Passcode:</b> <code>{selected_z_item['reg_passcode']}</code></p>
+                    <p><b>Shareable Link for Zonal Manager:</b></p>
+                    <code>{z_link}</code>
+                </div>
+            """, unsafe_allow_html=True)
+            st.code(z_link, language="text")
 
     with tab2:
         st.subheader("Update Zonal Quotas")
@@ -448,33 +388,20 @@ if role == "Regional Manager":
                 sel_z = st.selectbox(
                     "Select Zone",
                     [dict(z) for z in zones],
-                    format_func=lambda x: (
-                        f"{x['name']} (Current: {x['fertilizer_quota']} Qtl)"
-                    ),
+                    format_func=lambda x: f"{x['name']} (Current: {x['fertilizer_quota']} Qtl)",
                 )
-                new_q = st.number_input(
-                    "Assign Quota (Quintals)",
-                    min_value=0,
-                    value=sel_z["fertilizer_quota"],
-                    step=100,
-                )
+                new_q = st.number_input("Assign Quota (Quintals)", min_value=0, value=sel_z["fertilizer_quota"], step=100)
                 if st.form_submit_button("Save Allocation"):
-                    conn.execute(
-                        "UPDATE zones SET fertilizer_quota = ? WHERE id = ?",
-                        (new_q, sel_z["id"]),
-                    )
+                    conn.execute("UPDATE zones SET fertilizer_quota = ? WHERE id = ?", (new_q, sel_z["id"]))
                     conn.commit()
                     st.success("Updated successfully!")
                     st.rerun()
 
     with tab3:
-        df_all = pd.read_sql_query(
-            """
+        df_all = pd.read_sql_query("""
             SELECT z.name AS Zone, z.fertilizer_quota AS Zone_Quota, w.name AS Woreda, w.fertilizer_quota AS Woreda_Quota
             FROM zones z LEFT JOIN woredas w ON w.zone_id = z.id
-        """,
-            conn,
-        )
+        """, conn)
         st.dataframe(df_all, use_container_width=True)
 
 # ==============================================================================
@@ -488,12 +415,8 @@ elif role == "Zonal Manager":
         </div>
     """, unsafe_allow_html=True)
 
-    zone = conn.execute(
-        "SELECT * FROM zones WHERE id = ?", (user_info["unit_id"],)
-    ).fetchone()
-    woredas = conn.execute(
-        "SELECT * FROM woredas WHERE zone_id = ?", (zone["id"],)
-    ).fetchall()
+    zone = conn.execute("SELECT * FROM zones WHERE id = ?", (user_info["unit_id"],)).fetchone()
+    woredas = conn.execute("SELECT * FROM woredas WHERE zone_id = ?", (zone["id"],)).fetchall()
 
     allocated = sum([w["fertilizer_quota"] for w in woredas]) if woredas else 0
     remaining = zone["fertilizer_quota"] - allocated
@@ -505,25 +428,14 @@ elif role == "Zonal Manager":
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3 = st.tabs(
-        ["➕ Register Woreda & Send Link", "⚖️ Cascade Woreda Quota", "📊 Woredas"]
-    )
+    tab1, tab2, tab3 = st.tabs(["➕ Register Woreda & Link Selector", "⚖️ Cascade Woreda Quota", "📊 Woredas"])
 
     with tab1:
-        st.subheader("Register Woreda & Generate Woreda Access Link")
+        st.subheader("1. Register New Woreda")
         with st.form("add_w_form"):
-            w_name = st.text_input(
-                "Woreda Name", placeholder="e.g., Limmu Seka Woreda"
-            )
-            w_quota = st.number_input(
-                "Initial Quota (Quintals)", min_value=0, value=500, step=50
-            )
-            w_price = st.number_input(
-                "Fertilizer Unit Price (ETB / Qtl)",
-                min_value=1000.0,
-                value=4500.0,
-                step=100.0,
-            )
+            w_name = st.text_input("Woreda Name", placeholder="e.g., Limmu Seka Woreda")
+            w_quota = st.number_input("Initial Quota (Quintals)", min_value=0, value=500, step=50)
+            w_price = st.number_input("Fertilizer Unit Price (ETB / Qtl)", min_value=1000.0, value=4500.0, step=100.0)
 
             if st.form_submit_button("Register Woreda") and w_name:
                 new_w_id = f"WRD-00{len(woredas)+1}"
@@ -536,17 +448,26 @@ elif role == "Zonal Manager":
                 st.success(f"Woreda '{w_name}' registered!")
                 st.rerun()
 
-        st.markdown("### 🔗 Active Woreda Registration Links & Passcodes")
+        st.markdown("---")
+        st.subheader("2. 🔗 Select Woreda to View Shareable Link")
         if woredas:
-            for w in woredas:
-                w_link = f"{get_base_url()}?role=Woreda+Manager&passcode={w['reg_passcode']}&unit_id={w['id']}"
-                st.markdown(f"""
-                    <div class="link-box">
-                        <b>📍 Woreda: {w['name']}</b> | Passcode: <code>{w['reg_passcode']}</code><br>
-                        <b>Shareable Link for Woreda Manager:</b><br>
-                        <code>{w_link}</code>
-                    </div>
-                """, unsafe_allow_html=True)
+            selected_w_item = st.selectbox(
+                "Select a Woreda from the list:",
+                [dict(w) for w in woredas],
+                format_func=lambda x: f"📍 {x['name']} (ID: {x['id']})"
+            )
+            
+            w_link = f"{get_base_url()}?role=Woreda+Manager&passcode={selected_w_item['reg_passcode']}&unit_id={selected_w_item['id']}"
+            
+            st.markdown(f"""
+                <div class="link-box">
+                    <h4>📍 Woreda: {selected_w_item['name']}</h4>
+                    <p><b>6-Digit Registration Passcode:</b> <code>{selected_w_item['reg_passcode']}</code></p>
+                    <p><b>Shareable Link for Woreda Manager:</b></p>
+                    <code>{w_link}</code>
+                </div>
+            """, unsafe_allow_html=True)
+            st.code(w_link, language="text")
 
     with tab2:
         if woredas:
@@ -554,29 +475,17 @@ elif role == "Zonal Manager":
                 sel_w = st.selectbox(
                     "Select Woreda",
                     [dict(w) for w in woredas],
-                    format_func=lambda x: (
-                        f"{x['name']} (Current: {x['fertilizer_quota']} Qtl)"
-                    ),
+                    format_func=lambda x: f"{x['name']} (Current: {x['fertilizer_quota']} Qtl)",
                 )
-                new_w_q = st.number_input(
-                    "Assign Quota (Quintals)",
-                    min_value=0,
-                    value=sel_w["fertilizer_quota"],
-                    step=50,
-                )
+                new_w_q = st.number_input("Assign Quota (Quintals)", min_value=0, value=sel_w["fertilizer_quota"], step=50)
                 if st.form_submit_button("Update Quota"):
-                    conn.execute(
-                        "UPDATE woredas SET fertilizer_quota = ? WHERE id = ?",
-                        (new_w_q, sel_w["id"]),
-                    )
+                    conn.execute("UPDATE woredas SET fertilizer_quota = ? WHERE id = ?", (new_w_q, sel_w["id"]))
                     conn.commit()
                     st.success("Updated successfully!")
                     st.rerun()
 
     with tab3:
-        st.dataframe(
-            pd.DataFrame([dict(w) for w in woredas]), use_container_width=True
-        )
+        st.dataframe(pd.DataFrame([dict(w) for w in woredas]), use_container_width=True)
 
 # ==============================================================================
 # 3. WOREDA MANAGER ROLE
@@ -589,15 +498,9 @@ elif role == "Woreda Manager":
         </div>
     """, unsafe_allow_html=True)
 
-    woreda = conn.execute(
-        "SELECT * FROM woredas WHERE id = ?", (user_info["unit_id"],)
-    ).fetchone()
-    kebeles = conn.execute(
-        "SELECT * FROM kebeles WHERE woreda_id = ?", (woreda["id"],)
-    ).fetchall()
-    fee_items = conn.execute(
-        "SELECT * FROM fee_items WHERE woreda_id = ?", (woreda["id"],)
-    ).fetchall()
+    woreda = conn.execute("SELECT * FROM woredas WHERE id = ?", (user_info["unit_id"],)).fetchone()
+    kebeles = conn.execute("SELECT * FROM kebeles WHERE woreda_id = ?", (woreda["id"],)).fetchall()
+    fee_items = conn.execute("SELECT * FROM fee_items WHERE woreda_id = ?", (woreda["id"],)).fetchall()
 
     allocated = sum([k["fertilizer_quota"] for k in kebeles]) if kebeles else 0
     remaining = woreda["fertilizer_quota"] - allocated
@@ -609,15 +512,10 @@ elif role == "Woreda Manager":
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "➕ Register Kebele & Send DA Link",
-        "💳 Configure Fees",
-        "⚖️ Cascade Kebele Quota",
-        "📊 Kebeles",
-    ])
+    tab1, tab2, tab3, tab4 = st.tabs(["➕ Register Kebele & Link Selector", "💳 Configure Fees", "⚖️ Cascade Kebele Quota", "📊 Kebeles"])
 
     with tab1:
-        st.subheader("Register Kebele & Generate DA Worker Link")
+        st.subheader("1. Register New Kebele & Assign DA")
         with st.form("add_k_form"):
             c_a, c_b = st.columns(2)
             k_name = c_a.text_input("Kebele Name", placeholder="e.g., Sombo Kebele")
@@ -636,17 +534,27 @@ elif role == "Woreda Manager":
                 st.success(f"Kebele '{k_name}' registered!")
                 st.rerun()
 
-        st.markdown("### 🔗 Active DA Worker Registration Links & Passcodes")
+        st.markdown("---")
+        st.subheader("2. 🔗 Select Kebele to View DA Worker Shareable Link")
         if kebeles:
-            for k in kebeles:
-                da_link = f"{get_base_url()}?role=DA+Worker+(Kebele+Level)&passcode={k['reg_passcode']}&unit_id={k['id']}"
-                st.markdown(f"""
-                    <div class="link-box">
-                        <b>📍 Kebele: {k['name']}</b> (Lead DA: {k['da_name']}) | Passcode: <code>{k['reg_passcode']}</code><br>
-                        <b>Shareable Link for DA Worker:</b><br>
-                        <code>{da_link}</code>
-                    </div>
-                """, unsafe_allow_html=True)
+            selected_k_item = st.selectbox(
+                "Select a Kebele from the list:",
+                [dict(k) for k in kebeles],
+                format_func=lambda x: f"📍 {x['name']} (Lead DA: {x['da_name']})"
+            )
+            
+            da_link = f"{get_base_url()}?role=DA+Worker+(Kebele+Level)&passcode={selected_k_item['reg_passcode']}&unit_id={selected_k_item['id']}"
+            
+            st.markdown(f"""
+                <div class="link-box">
+                    <h4>📍 Kebele: {selected_k_item['name']}</h4>
+                    <p><b>Lead DA:</b> {selected_k_item['da_name']} | <b>Assistant DA:</b> {selected_k_item['assistant_name']}</p>
+                    <p><b>6-Digit Registration Passcode:</b> <code>{selected_k_item['reg_passcode']}</code></p>
+                    <p><b>Shareable Link for DA Field Worker:</b></p>
+                    <code>{da_link}</code>
+                </div>
+            """, unsafe_allow_html=True)
+            st.code(da_link, language="text")
 
     with tab2:
         st.subheader("Configure Mandatory Fee Items")
@@ -673,13 +581,9 @@ elif role == "Woreda Manager":
                     [dict(k) for k in kebeles],
                     format_func=lambda x: f"{x['name']} (Current: {x['fertilizer_quota']} Qtl)",
                 )
-                new_k_q = st.number_input(
-                    "Set Quota (Quintals)", min_value=0, value=sel_k["fertilizer_quota"], step=10
-                )
+                new_k_q = st.number_input("Set Quota (Quintals)", min_value=0, value=sel_k["fertilizer_quota"], step=10)
                 if st.form_submit_button("Update Quota"):
-                    conn.execute(
-                        "UPDATE kebeles SET fertilizer_quota = ? WHERE id = ?", (new_k_q, sel_k["id"])
-                    )
+                    conn.execute("UPDATE kebeles SET fertilizer_quota = ? WHERE id = ?", (new_k_q, sel_k["id"]))
                     conn.commit()
                     st.success("Quota updated!")
                     st.rerun()
@@ -703,9 +607,7 @@ elif role == "DA Worker (Kebele Level)":
         (user_info["unit_id"],),
     ).fetchone()
 
-    fee_items = conn.execute(
-        "SELECT * FROM fee_items WHERE woreda_id = ?", (kebele["woreda_id"],)
-    ).fetchall()
+    fee_items = conn.execute("SELECT * FROM fee_items WHERE woreda_id = ?", (kebele["woreda_id"],)).fetchall()
     fixed_fees_total = sum([f["amount"] for f in fee_items]) if fee_items else 0.0
 
     c1, c2, c3, c4 = st.columns(4)
@@ -715,12 +617,7 @@ elif role == "DA Worker (Kebele Level)":
     c4.metric("Kebele Quota Stock", f"{kebele['fertilizer_quota']:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📝 Register Farmer",
-        "💳 Verification & Fees",
-        "🎲 Dynamic Grouping",
-        "📋 Distribution List",
-    ])
+    tab1, tab2, tab3, tab4 = st.tabs(["📝 Register Farmer", "💳 Verification & Fees", "🎲 Dynamic Grouping", "📋 Distribution List"])
 
     with tab1:
         st.subheader("Register Farmer & Initial Fee Checklist")
