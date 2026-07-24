@@ -118,8 +118,8 @@ def init_db():
         )
     """)
 
-    # Seed Default Root Data (Amhara Region Defaults)
-    cursor.execute("INSERT OR IGNORE INTO regions VALUES ('REG-001', 'Amhara Region', 50000)")
+    # Seed Default Root Data (Amhara Region Defaults with 150,000 Qtl to avoid deficits)
+    cursor.execute("INSERT OR IGNORE INTO regions VALUES ('REG-001', 'Amhara Region', 150000)")
 
     admin_pw = hash_password("admin123")
     cursor.execute(
@@ -147,7 +147,7 @@ def generate_unique_id(table_name: str, prefix: str) -> str:
 
 # ==================== STREAMLIT CONFIG & UI STYLING ====================
 st.set_page_config(
-    page_title="Amhara Region Fertilizer Cascade Management Portal",
+    page_title="Regional Fertilizer Cascade Management Portal",
     page_icon="🌾",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -212,7 +212,7 @@ url_unit = query_params.get("unit_id", None)
 if not st.session_state["authenticated"]:
     st.markdown("""
         <div class="hero-banner">
-            <h1>🌾 Amhara Region Fertilizer Cascade Management System</h1>
+            <h1>🌾 Fertilizer Cascade Management System</h1>
             <p>Secure Role-Based Portal Access & Multi-Tiered Passcode Verification</p>
         </div>
     """, unsafe_allow_html=True)
@@ -323,18 +323,18 @@ st.sidebar.markdown("---")
 conn = get_db_connection()
 
 # ==============================================================================
-# 1. REGIONAL MANAGER ROLE (AMHARA REGION EXECUTIVE PORTAL)
+# 1. REGIONAL MANAGER ROLE (EXECUTIVE PORTAL)
 # ==============================================================================
 if role == "Regional Manager":
-    st.markdown("""
-        <div class="hero-banner">
-            <h1>🗺️ Amhara Region Executive Portal</h1>
-            <p>Set Zonal quotas, manage administrative units, and inspect entire Zonal, Woreda, Kebele, and Farmer records across Amhara Region.</p>
-        </div>
-    """, unsafe_allow_html=True)
-
     region = conn.execute("SELECT * FROM regions WHERE id = ?", (user_info["unit_id"],)).fetchone()
     zones = conn.execute("SELECT * FROM zones WHERE region_id = ?", (region["id"],)).fetchall()
+
+    st.markdown(f"""
+        <div class="hero-banner">
+            <h1>🗺️ {region['name']} Executive Portal</h1>
+            <p>Set Zonal quotas, manage administrative units, edit regional settings, and inspect entire Zonal, Woreda, Kebele, and Farmer records.</p>
+        </div>
+    """, unsafe_allow_html=True)
 
     allocated = sum([z["fertilizer_quota"] for z in zones]) if zones else 0
     remaining = region["total_quota"] - allocated
@@ -346,7 +346,8 @@ if role == "Regional Manager":
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "✏️ Edit Region Name & Stock",
         "➕ Register Zone & Links", 
         "⚖️ Cascade Zonal Quotas", 
         "🏢 Regional Hierarchy Inspection", 
@@ -354,7 +355,29 @@ if role == "Regional Manager":
         "🌾 Regional Farmer Master Database"
     ])
 
+    # 1. EDIT REGION NAME & STOCK
     with tab1:
+        st.subheader("✏️ Update Region Profile & Stock Settings")
+        st.caption("Change the regional name (e.g., Oromia Region ➔ Amhara Region) or adjust the Total Regional Stock capacity.")
+        
+        with st.form("edit_region_form"):
+            updated_region_name = st.text_input("Region Name", value=region["name"])
+            updated_total_stock = st.number_input("Total Regional Stock (Quintals)", min_value=0, value=region["total_quota"], step=1000)
+            
+            if st.form_submit_button("Save Changes"):
+                if updated_region_name.strip():
+                    conn.execute(
+                        "UPDATE regions SET name = ?, total_quota = ? WHERE id = ?",
+                        (updated_region_name.strip(), updated_total_stock, region["id"])
+                    )
+                    conn.commit()
+                    st.success("✅ Region details updated successfully!")
+                    st.rerun()
+                else:
+                    st.warning("Please enter a valid Region Name.")
+
+    # 2. REGISTER ZONE & LINKS
+    with tab2:
         st.subheader("1. Register New Zone")
         with st.form("reg_zone_form"):
             z_name = st.text_input("Zone Name", placeholder="e.g., South Wollo Zone")
@@ -392,7 +415,8 @@ if role == "Regional Manager":
             """, unsafe_allow_html=True)
             st.code(z_link, language="text")
 
-    with tab2:
+    # 3. CASCADE ZONAL QUOTAS
+    with tab3:
         st.subheader("Update Zonal Quotas")
         if zones:
             with st.form("set_z_quota"):
@@ -408,10 +432,10 @@ if role == "Regional Manager":
                     st.success("Updated successfully!")
                     st.rerun()
 
-    # 3. COMPLETE HIERARCHY DATA VIEW
-    with tab3:
+    # 4. COMPLETE HIERARCHY DATA VIEW
+    with tab4:
         st.subheader("📊 Comprehensive Regional Master Tree")
-        st.caption("Consolidated view mapping Regions → Zones → Woredas → Kebeles across Amhara Region")
+        st.caption(f"Consolidated view mapping Regions ➔ Zones ➔ Woredas ➔ Kebeles across {region['name']}")
         
         df_master = pd.read_sql_query("""
             SELECT 
@@ -434,8 +458,8 @@ if role == "Regional Manager":
         
         st.dataframe(df_master, use_container_width=True)
 
-    # 4. DEEP WOREDA & KEBELE LEVEL INSPECTION
-    with tab4:
+    # 5. DEEP WOREDA & KEBELE LEVEL INSPECTION
+    with tab5:
         st.subheader("📍 Inspect Specific Woreda & Kebele Operations")
         
         zonal_list = conn.execute("SELECT * FROM zones WHERE region_id = ?", (region["id"],)).fetchall()
@@ -450,7 +474,6 @@ if role == "Regional Manager":
                 st.markdown(f"### 🏢 Details for **{selected_w['name']}**")
                 st.write(f"**Fertilizer Quota:** {selected_w['fertilizer_quota']:,} Qtl | **Base Price:** {selected_w['fertilizer_price_per_qtl']:,.2f} ETB / Qtl")
                 
-                # Fetch Kebele breakdown
                 kebele_df = pd.read_sql_query("""
                     SELECT id AS Kebele_ID, name AS Kebele_Name, da_name AS Lead_DA, 
                            assistant_name AS Assistant_DA, fertilizer_quota AS Quota_Qtl 
@@ -460,7 +483,6 @@ if role == "Regional Manager":
                 st.markdown("##### 📍 Kebeles Under This Woreda")
                 st.dataframe(kebele_df, use_container_width=True)
                 
-                # Fetch Woreda Fee Structure
                 fees_df = pd.read_sql_query("""
                     SELECT fee_name AS Fee_Item_Name, amount AS Fee_Amount_ETB 
                     FROM fee_items WHERE woreda_id = ?
@@ -473,10 +495,10 @@ if role == "Regional Manager":
         else:
             st.warning("No Zones registered in this Region yet.")
 
-    # 5. REGIONAL FARMER MASTER DATABASE
-    with tab5:
+    # 6. REGIONAL FARMER MASTER DATABASE
+    with tab6:
         st.subheader("🌾 Regional Master Farmer Register")
-        st.caption("View every farmer registered by DA Field Workers across all Kebeles in Amhara Region.")
+        st.caption(f"View every farmer registered by DA Field Workers across all Kebeles in {region['name']}.")
         
         df_farmers_all = pd.read_sql_query("""
             SELECT 
@@ -504,7 +526,7 @@ if role == "Regional Manager":
         if not df_farmers_all.empty:
             st.dataframe(df_farmers_all, use_container_width=True)
         else:
-            st.info("No farmers registered yet across any Kebele in Amhara Region.")
+            st.info(f"No farmers registered yet across any Kebele in {region['name']}.")
 
 # ==============================================================================
 # 2. ZONAL MANAGER ROLE
