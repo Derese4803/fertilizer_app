@@ -118,8 +118,8 @@ def init_db():
         )
     """)
 
-    # Seed Default Root Data
-    cursor.execute("INSERT OR IGNORE INTO regions VALUES ('REG-001', 'Oromia Region', 50000)")
+    # Seed Default Root Data (Amhara Region Defaults)
+    cursor.execute("INSERT OR IGNORE INTO regions VALUES ('REG-001', 'Amhara Region', 50000)")
 
     admin_pw = hash_password("admin123")
     cursor.execute(
@@ -127,9 +127,9 @@ def init_db():
         ("reg_admin", admin_pw, "Regional Manager", "REG-001", "000000"),
     )
 
-    cursor.execute("INSERT OR IGNORE INTO zones VALUES ('ZN-001', 'Jimma Zone', 'REG-001', 15000, '123456')")
-    cursor.execute("INSERT OR IGNORE INTO woredas VALUES ('WRD-001', 'Manna Woreda', 'ZN-001', 5000, 4500.0, '654321')")
-    cursor.execute("INSERT OR IGNORE INTO kebeles VALUES ('KEB-001', 'Yebu Kebele', 'WRD-001', 'Alemayehu Tadesse', 'Getachew Bekele', 1500, '112233')")
+    cursor.execute("INSERT OR IGNORE INTO zones VALUES ('ZN-001', 'Central Gondar Zone', 'REG-001', 15000, '123456')")
+    cursor.execute("INSERT OR IGNORE INTO woredas VALUES ('WRD-001', 'Gondar Zuria Woreda', 'ZN-001', 5000, 4500.0, '654321')")
+    cursor.execute("INSERT OR IGNORE INTO kebeles VALUES ('KEB-001', 'Degoma Kebele', 'WRD-001', 'Alemayehu Tadesse', 'Getachew Bekele', 1500, '112233')")
 
     cursor.execute("INSERT OR IGNORE INTO fee_items (id, woreda_id, fee_name, amount) VALUES (1, 'WRD-001', 'ስፖርት ክፍያ (Sport Fee)', 150.0)")
     cursor.execute("INSERT OR IGNORE INTO fee_items (id, woreda_id, fee_name, amount) VALUES (2, 'WRD-001', 'የመሬት ግብር (Land Tax)', 350.0)")
@@ -147,7 +147,7 @@ def generate_unique_id(table_name: str, prefix: str) -> str:
 
 # ==================== STREAMLIT CONFIG & UI STYLING ====================
 st.set_page_config(
-    page_title="Cascade Fertilizer Management Portal",
+    page_title="Amhara Region Fertilizer Cascade Management Portal",
     page_icon="🌾",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -212,7 +212,7 @@ url_unit = query_params.get("unit_id", None)
 if not st.session_state["authenticated"]:
     st.markdown("""
         <div class="hero-banner">
-            <h1>🌾 National Fertilizer Cascade Management System</h1>
+            <h1>🌾 Amhara Region Fertilizer Cascade Management System</h1>
             <p>Secure Role-Based Portal Access & Multi-Tiered Passcode Verification</p>
         </div>
     """, unsafe_allow_html=True)
@@ -323,13 +323,13 @@ st.sidebar.markdown("---")
 conn = get_db_connection()
 
 # ==============================================================================
-# 1. REGIONAL MANAGER ROLE (WITH COMPLETE DOWNSTREAM VISIBILITY)
+# 1. REGIONAL MANAGER ROLE (AMHARA REGION EXECUTIVE PORTAL)
 # ==============================================================================
 if role == "Regional Manager":
     st.markdown("""
         <div class="hero-banner">
-            <h1>🗺️ Regional Executive Portal</h1>
-            <p>Set Zonal quotas, manage administrative units, and inspect entire Zonal, Woreda, Kebele, and Farmer records across the region.</p>
+            <h1>🗺️ Amhara Region Executive Portal</h1>
+            <p>Set Zonal quotas, manage administrative units, and inspect entire Zonal, Woreda, Kebele, and Farmer records across Amhara Region.</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -357,7 +357,7 @@ if role == "Regional Manager":
     with tab1:
         st.subheader("1. Register New Zone")
         with st.form("reg_zone_form"):
-            z_name = st.text_input("Zone Name", placeholder="e.g., East Hararghe Zone")
+            z_name = st.text_input("Zone Name", placeholder="e.g., South Wollo Zone")
             z_quota = st.number_input("Initial Quota (Quintals)", min_value=0, value=1000, step=100)
 
             if st.form_submit_button("Register Zone") and z_name:
@@ -411,7 +411,7 @@ if role == "Regional Manager":
     # 3. COMPLETE HIERARCHY DATA VIEW
     with tab3:
         st.subheader("📊 Comprehensive Regional Master Tree")
-        st.caption("Consolidated view mapping Regions → Zones → Woredas → Kebeles")
+        st.caption("Consolidated view mapping Regions → Zones → Woredas → Kebeles across Amhara Region")
         
         df_master = pd.read_sql_query("""
             SELECT 
@@ -476,7 +476,7 @@ if role == "Regional Manager":
     # 5. REGIONAL FARMER MASTER DATABASE
     with tab5:
         st.subheader("🌾 Regional Master Farmer Register")
-        st.caption("View every farmer registered by DA Field Workers across all Kebeles in the region.")
+        st.caption("View every farmer registered by DA Field Workers across all Kebeles in Amhara Region.")
         
         df_farmers_all = pd.read_sql_query("""
             SELECT 
@@ -504,7 +504,7 @@ if role == "Regional Manager":
         if not df_farmers_all.empty:
             st.dataframe(df_farmers_all, use_container_width=True)
         else:
-            st.info("No farmers registered yet across any Kebele in this region.")
+            st.info("No farmers registered yet across any Kebele in Amhara Region.")
 
 # ==============================================================================
 # 2. ZONAL MANAGER ROLE
@@ -535,7 +535,7 @@ elif role == "Zonal Manager":
     with tab1:
         st.subheader("1. Register New Woreda")
         with st.form("add_w_form"):
-            w_name = st.text_input("Woreda Name", placeholder="e.g., Limmu Seka Woreda")
+            w_name = st.text_input("Woreda Name", placeholder="e.g., Bahir Dar Zuria Woreda")
             w_quota = st.number_input("Initial Quota (Quintals)", min_value=0, value=500, step=50)
             w_price = st.number_input("Fertilizer Unit Price (ETB / Qtl)", min_value=1000.0, value=4500.0, step=100.0)
 
@@ -620,7 +620,7 @@ elif role == "Woreda Manager":
         st.subheader("1. Register New Kebele & Assign DA")
         with st.form("add_k_form"):
             c_a, c_b = st.columns(2)
-            k_name = c_a.text_input("Kebele Name", placeholder="e.g., Sombo Kebele")
+            k_name = c_a.text_input("Kebele Name", placeholder="e.g., Woito Kebele")
             da_name = c_a.text_input("Lead DA Worker", placeholder="e.g., Mulugeta Kebede")
             assistant_name = c_b.text_input("Assistant DA", placeholder="e.g., Tigist Hailu")
             k_quota = c_b.number_input("Initial Quota (Quintals)", min_value=0, value=200, step=10)
