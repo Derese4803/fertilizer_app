@@ -10,7 +10,7 @@ DB_FILE = "fertilizer_cascade_auth_v7.db"
 
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -198,21 +198,17 @@ def get_base_url():
         return "http://localhost:8501"
 
 
-# Session State Management
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "user_info" not in st.session_state:
     st.session_state["user_info"] = None
 
-# Query parameters from shareable links
 query_params = st.query_params
 url_role = query_params.get("role", None)
 url_passcode = query_params.get("passcode", None)
 url_unit = query_params.get("unit_id", None)
 
-conn = get_db_connection()
-
-# ==================== AUTHENTICATION SYSTEM (LOGIN / REGISTER) ====================
+# ==================== AUTHENTICATION SYSTEM ====================
 if not st.session_state["authenticated"]:
     st.markdown("""
         <div class="hero-banner">
@@ -223,7 +219,6 @@ if not st.session_state["authenticated"]:
 
     auth_tab1, auth_tab2 = st.tabs(["🔑 Login", "📝 Register Account"])
 
-    # LOGIN TAB
     with auth_tab1:
         st.subheader("Login to Your Administrative Portal")
         with st.form("login_form"):
@@ -232,7 +227,7 @@ if not st.session_state["authenticated"]:
                 ["Regional Manager", "Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"],
                 index=["Regional Manager", "Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"].index(url_role)
                 if url_role in ["Regional Manager", "Zonal Manager", "Woreda Manager", "DA Worker (Kebele Level)"]
-                else 0
+                else 0,
             )
             login_username = st.text_input("Username")
             login_password = st.text_input("Password", type="password")
@@ -240,10 +235,12 @@ if not st.session_state["authenticated"]:
 
             if submit_login:
                 hashed = hash_password(login_password)
+                conn = get_db_connection()
                 user = conn.execute(
                     "SELECT * FROM users WHERE username = ? AND password_hash = ? AND role = ?",
                     (login_username, hashed, login_role),
                 ).fetchone()
+                conn.close()
 
                 if user:
                     st.session_state["authenticated"] = True
@@ -253,7 +250,6 @@ if not st.session_state["authenticated"]:
                 else:
                     st.error("❌ Invalid Username, Password, or Role selection!")
 
-    # REGISTER TAB
     with auth_tab2:
         st.subheader("Register Unit Manager Account")
         if url_passcode:
@@ -269,7 +265,6 @@ if not st.session_state["authenticated"]:
             )
             reg_username = st.text_input("Choose Username")
             reg_password = st.text_input("Choose Password", type="password")
-
             reg_passcode_input = st.text_input(
                 "6-Digit Registration Passcode",
                 value=url_passcode if url_passcode else "",
@@ -280,6 +275,7 @@ if not st.session_state["authenticated"]:
 
             if submit_reg:
                 if reg_username and reg_password and reg_passcode_input:
+                    conn = get_db_connection()
                     unit = None
                     if target_role == "Zonal Manager":
                         unit = conn.execute("SELECT id, name FROM zones WHERE reg_passcode = ?", (reg_passcode_input,)).fetchone()
@@ -300,8 +296,11 @@ if not st.session_state["authenticated"]:
                             conn.commit()
                             st.success(f"✅ Account for '{reg_username}' registered successfully under {unit['name']}! You can now log in.")
                         except sqlite3.IntegrityError:
-                            st.error(f"❌ Username '{reg_username}' is already registered for this specific unit ({unit['name']}). Duplicate usernames are only allowed across DIFFERENT units/links!")
+                            st.error(f"❌ Username '{reg_username}' is already registered for this specific unit ({unit['name']}).")
+                        finally:
+                            conn.close()
                     else:
+                        conn.close()
                         st.error("❌ Invalid Registration Passcode for the selected Role!")
                 else:
                     st.error("Please fill in all required fields.")
@@ -321,14 +320,16 @@ if st.sidebar.button("🔒 Logout"):
 
 st.sidebar.markdown("---")
 
+conn = get_db_connection()
+
 # ==============================================================================
-# 1. REGIONAL MANAGER ROLE
+# 1. REGIONAL MANAGER ROLE (WITH COMPLETE DOWNSTREAM VISIBILITY)
 # ==============================================================================
 if role == "Regional Manager":
     st.markdown("""
         <div class="hero-banner">
             <h1>🗺️ Regional Executive Portal</h1>
-            <p>Set Zonal quotas, register Zones, and manage Zonal access links.</p>
+            <p>Set Zonal quotas, manage administrative units, and inspect entire Zonal, Woreda, Kebele, and Farmer records across the region.</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -345,7 +346,13 @@ if role == "Regional Manager":
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs(["➕ Register Zone & Link Selector", "⚖️ Cascade Zonal Quotas", "📊 Hierarchy", "🗑️ Delete Zone"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "➕ Register Zone & Links", 
+        "⚖️ Cascade Zonal Quotas", 
+        "🏢 Regional Hierarchy Inspection", 
+        "📍 Woreda & Kebele Inspection",
+        "🌾 Regional Farmer Master Database"
+    ])
 
     with tab1:
         st.subheader("1. Register New Zone")
@@ -401,23 +408,103 @@ if role == "Regional Manager":
                     st.success("Updated successfully!")
                     st.rerun()
 
+    # 3. COMPLETE HIERARCHY DATA VIEW
     with tab3:
-        df_all = pd.read_sql_query("""
-            SELECT z.name AS Zone, z.fertilizer_quota AS Zone_Quota, w.name AS Woreda, w.fertilizer_quota AS Woreda_Quota
-            FROM zones z LEFT JOIN woredas w ON w.zone_id = z.id
-        """, conn)
-        st.dataframe(df_all, use_container_width=True)
+        st.subheader("📊 Comprehensive Regional Master Tree")
+        st.caption("Consolidated view mapping Regions → Zones → Woredas → Kebeles")
+        
+        df_master = pd.read_sql_query("""
+            SELECT 
+                r.name AS Region,
+                z.name AS Zone,
+                z.fertilizer_quota AS Zone_Quota_Qtl,
+                w.name AS Woreda,
+                w.fertilizer_quota AS Woreda_Quota_Qtl,
+                w.fertilizer_price_per_qtl AS Price_Per_Qtl_ETB,
+                k.name AS Kebele,
+                k.fertilizer_quota AS Kebele_Quota_Qtl,
+                k.da_name AS Lead_DA,
+                k.assistant_name AS Assistant_DA
+            FROM regions r
+            LEFT JOIN zones z ON z.region_id = r.id
+            LEFT JOIN woredas w ON w.zone_id = z.id
+            LEFT JOIN kebeles k ON k.woreda_id = w.id
+            WHERE r.id = ?
+        """, conn, params=(region["id"],))
+        
+        st.dataframe(df_master, use_container_width=True)
 
+    # 4. DEEP WOREDA & KEBELE LEVEL INSPECTION
     with tab4:
-        st.subheader("🗑️ Delete Zone Record")
-        if zones:
-            z_to_del = st.selectbox("Select Zone to Delete", [dict(z) for z in zones], format_func=lambda x: f"{x['name']} ({x['id']})", key="del_z_sb")
-            if st.button("Delete Selected Zone", type="primary"):
-                conn.execute("DELETE FROM users WHERE unit_id = ?", (z_to_del["id"],))
-                conn.execute("DELETE FROM zones WHERE id = ?", (z_to_del["id"],))
-                conn.commit()
-                st.success(f"Zone '{z_to_del['name']}' deleted successfully!")
-                st.rerun()
+        st.subheader("📍 Inspect Specific Woreda & Kebele Operations")
+        
+        zonal_list = conn.execute("SELECT * FROM zones WHERE region_id = ?", (region["id"],)).fetchall()
+        if zonal_list:
+            col_a, col_b = st.columns(2)
+            selected_z = col_a.selectbox("Filter Zone:", [dict(z) for z in zonal_list], format_func=lambda x: x["name"])
+            
+            woreda_list = conn.execute("SELECT * FROM woredas WHERE zone_id = ?", (selected_z["id"],)).fetchall()
+            if woreda_list:
+                selected_w = col_b.selectbox("Filter Woreda:", [dict(w) for w in woreda_list], format_func=lambda x: x["name"])
+                
+                st.markdown(f"### 🏢 Details for **{selected_w['name']}**")
+                st.write(f"**Fertilizer Quota:** {selected_w['fertilizer_quota']:,} Qtl | **Base Price:** {selected_w['fertilizer_price_per_qtl']:,.2f} ETB / Qtl")
+                
+                # Fetch Kebele breakdown
+                kebele_df = pd.read_sql_query("""
+                    SELECT id AS Kebele_ID, name AS Kebele_Name, da_name AS Lead_DA, 
+                           assistant_name AS Assistant_DA, fertilizer_quota AS Quota_Qtl 
+                    FROM kebeles WHERE woreda_id = ?
+                """, conn, params=(selected_w["id"],))
+                
+                st.markdown("##### 📍 Kebeles Under This Woreda")
+                st.dataframe(kebele_df, use_container_width=True)
+                
+                # Fetch Woreda Fee Structure
+                fees_df = pd.read_sql_query("""
+                    SELECT fee_name AS Fee_Item_Name, amount AS Fee_Amount_ETB 
+                    FROM fee_items WHERE woreda_id = ?
+                """, conn, params=(selected_w["id"],))
+                
+                st.markdown("##### 💳 Configured Fee Checklist for This Woreda")
+                st.dataframe(fees_df, use_container_width=True)
+            else:
+                st.warning("No Woredas registered in this Zone yet.")
+        else:
+            st.warning("No Zones registered in this Region yet.")
+
+    # 5. REGIONAL FARMER MASTER DATABASE
+    with tab5:
+        st.subheader("🌾 Regional Master Farmer Register")
+        st.caption("View every farmer registered by DA Field Workers across all Kebeles in the region.")
+        
+        df_farmers_all = pd.read_sql_query("""
+            SELECT 
+                f.id AS Farmer_ID,
+                f.national_id AS National_ID,
+                f.name AS Farmer_Name,
+                z.name AS Zone,
+                w.name AS Woreda,
+                k.name AS Kebele,
+                f.village AS Village,
+                f.land_size AS Land_Size_Ha,
+                f.phone AS Phone,
+                f.requested_quintals AS Requested_Qtl,
+                (f.requested_quintals * w.fertilizer_price_per_qtl) AS Fertilizer_Cost_ETB,
+                f.status AS Status,
+                f.fee_verified AS Fee_Verified,
+                f.group_id AS Group_ID
+            FROM farmers f
+            JOIN kebeles k ON f.kebele_id = k.id
+            JOIN woredas w ON k.woreda_id = w.id
+            JOIN zones z ON w.zone_id = z.id
+            WHERE z.region_id = ?
+        """, conn, params=(region["id"],))
+        
+        if not df_farmers_all.empty:
+            st.dataframe(df_farmers_all, use_container_width=True)
+        else:
+            st.info("No farmers registered yet across any Kebele in this region.")
 
 # ==============================================================================
 # 2. ZONAL MANAGER ROLE
@@ -443,7 +530,7 @@ elif role == "Zonal Manager":
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs(["➕ Register Woreda & Link Selector", "⚖️ Cascade Woreda Quota", "📊 Woredas", "🗑️ Delete Woreda"])
+    tab1, tab2, tab3 = st.tabs(["➕ Register Woreda & Link Selector", "⚖️ Cascade Woreda Quota", "📊 Woredas"])
 
     with tab1:
         st.subheader("1. Register New Woreda")
@@ -502,17 +589,6 @@ elif role == "Zonal Manager":
     with tab3:
         st.dataframe(pd.DataFrame([dict(w) for w in woredas]), use_container_width=True)
 
-    with tab4:
-        st.subheader("🗑️ Delete Woreda Record")
-        if woredas:
-            w_to_del = st.selectbox("Select Woreda to Delete", [dict(w) for w in woredas], format_func=lambda x: f"{x['name']} ({x['id']})", key="del_w_sb")
-            if st.button("Delete Selected Woreda", type="primary"):
-                conn.execute("DELETE FROM users WHERE unit_id = ?", (w_to_del["id"],))
-                conn.execute("DELETE FROM woredas WHERE id = ?", (w_to_del["id"],))
-                conn.commit()
-                st.success(f"Woreda '{w_to_del['name']}' deleted successfully!")
-                st.rerun()
-
 # ==============================================================================
 # 3. WOREDA MANAGER ROLE
 # ==============================================================================
@@ -538,7 +614,7 @@ elif role == "Woreda Manager":
     c4.metric("Unallocated Stock", f"{remaining:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["➕ Register Kebele & Link Selector", "💳 Configure Fees (1, 2, 3...)", "⚖️ Cascade Kebele Quota", "📊 Kebeles", "🗑️ Delete Kebele/Fee"])
+    tab1, tab2, tab3, tab4 = st.tabs(["➕ Register Kebele & Link Selector", "💳 Configure Fees (1, 2, 3...)", "⚖️ Cascade Kebele Quota", "📊 Kebeles"])
 
     with tab1:
         st.subheader("1. Register New Kebele & Assign DA")
@@ -620,31 +696,6 @@ elif role == "Woreda Manager":
     with tab4:
         st.dataframe(pd.DataFrame([dict(k) for k in kebeles]), use_container_width=True)
 
-    with tab5:
-        st.subheader("🗑️ Delete Operations")
-        col_del1, col_del2 = st.columns(2)
-        
-        with col_del1:
-            st.markdown("##### Delete Kebele Record")
-            if kebeles:
-                k_to_del = st.selectbox("Select Kebele to Delete", [dict(k) for k in kebeles], format_func=lambda x: f"{x['name']} ({x['id']})", key="del_k_sb")
-                if st.button("Delete Kebele", type="primary"):
-                    conn.execute("DELETE FROM users WHERE unit_id = ?", (k_to_del["id"],))
-                    conn.execute("DELETE FROM kebeles WHERE id = ?", (k_to_del["id"],))
-                    conn.commit()
-                    st.success(f"Kebele '{k_to_del['name']}' deleted!")
-                    st.rerun()
-
-        with col_del2:
-            st.markdown("##### Delete Fee Item")
-            if fee_items:
-                f_to_del = st.selectbox("Select Fee Item to Delete", [dict(f) for f in fee_items], format_func=lambda x: f"{x['fee_name']} ({x['amount']} ETB)", key="del_f_sb")
-                if st.button("Delete Fee Item", type="primary"):
-                    conn.execute("DELETE FROM fee_items WHERE id = ?", (f_to_del["id"],))
-                    conn.commit()
-                    st.success("Fee item deleted!")
-                    st.rerun()
-
 # ==============================================================================
 # 4. DA WORKER ROLE (KEBELE LEVEL)
 # ==============================================================================
@@ -671,7 +722,7 @@ elif role == "DA Worker (Kebele Level)":
     c4.metric("Kebele Quota Stock", f"{kebele['fertilizer_quota']:,} Qtl")
 
     st.markdown("---")
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 Register Farmer", "💳 Verification & Fees", "🎲 Dynamic Grouping", "📋 Distribution List", "🗑️ Delete Farmer"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📝 Register Farmer", "💳 Verification & Fees", "🎲 Dynamic Grouping", "📋 Distribution List"])
 
     with tab1:
         st.subheader("Register Farmer & Initial Fee Checklist")
@@ -766,16 +817,5 @@ elif role == "DA Worker (Kebele Level)":
         all_k = conn.execute("SELECT * FROM farmers WHERE kebele_id = ?", (kebele["id"],)).fetchall()
         if all_k:
             st.dataframe(pd.DataFrame([dict(f) for f in all_k]), use_container_width=True)
-
-    with tab5:
-        st.subheader("🗑️ Delete Farmer Record")
-        farmers_del_list = conn.execute("SELECT * FROM farmers WHERE kebele_id = ?", (kebele["id"],)).fetchall()
-        if farmers_del_list:
-            f_to_del = st.selectbox("Select Farmer to Delete", [dict(f) for f in farmers_del_list], format_func=lambda x: f"{x['name']} (Nat ID: {x['national_id']})", key="del_f_sb")
-            if st.button("Delete Farmer Record", type="primary"):
-                conn.execute("DELETE FROM farmers WHERE id = ?", (f_to_del["id"],))
-                conn.commit()
-                st.success(f"Farmer '{f_to_del['name']}' removed!")
-                st.rerun()
 
 conn.close()
